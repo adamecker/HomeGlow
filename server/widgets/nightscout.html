@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nightscout CGM</title>
+  
+  <script type="application/json" id="homeglow-manifest">
+  {
+    "manifestVersion": 1,
+    "id": "nightscout-cgm",
+    "name": "Nightscout CGM",
+    "description": "Real-time CGM monitor showing Blood Glucose, Trend Arrow, Delta, Reading Age, IOB, and COB.",
+    "apiVersion": "v1",
+    "storage": true
+  }
+  </script>
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--card-bg, #1e1e1e);
+      color: var(--text, #ffffff);
+      height: 100vh; width: 100vw; overflow: hidden;
+      display: flex; flex-direction: column; padding: 12px; user-select: none;
+    }
+    .header { display: flex; justify-content: space-between; align-items: center; width: 100%; height: 36px; flex-shrink: 0; }
+    .title { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; }
+    .gear-button {
+      background: rgba(255, 255, 255, 0.1); border: 1px solid rgba(255, 255, 255, 0.2);
+      color: inherit; width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 1.15rem; line-height: 1; touch-action: manipulation;
+    }
+    .gear-button:active { transform: scale(0.92); background: rgba(255, 255, 255, 0.25); }
+    .main-content {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; width: 100%;
+    }
+    .sgv-container { display: flex; align-items: baseline; justify-content: center; gap: 6px; line-height: 1; margin: 4px 0; }
+    .sgv-value { font-size: clamp(3.2rem, 16vw, 6rem); font-weight: 800; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+    .direction-arrow { font-size: clamp(2rem, 9vw, 3.6rem); font-weight: 700; }
+    .meta-container {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      font-size: clamp(0.95rem, 4vw, 1.3rem); font-weight: 600; opacity: 0.85; margin-bottom: 6px;
+    }
+    .meta-delta { font-variant-numeric: tabular-nums; }
+    .meta-age { font-size: 0.85em; opacity: 0.7; }
+    .stats-container { display: flex; gap: 10px; margin-top: 4px; font-size: clamp(0.75rem, 3vw, 1rem); font-weight: 600; }
+    .stat-pill { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 6px; padding: 3px 8px; }
+    .color-in-range { color: #10b981; }
+    .color-low { color: #ef4444; }
+    .color-urgent { color: #b91c1c; }
+    .color-high { color: #f59e0b; }
+    .stale { opacity: 0.45; }
+    .setup-box {
+      border: 1px dashed rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.04);
+      border-radius: 12px; padding: 20px; width: 100%; max-width: 320px; cursor: pointer;
+      display: flex; flex-direction: column; align-items: center; gap: 8px; touch-action: manipulation;
+    }
+    .setup-box:active { background: rgba(255, 255, 255, 0.08); }
+    .status-text { font-size: 0.9rem; opacity: 0.75; line-height: 1.4; padding: 8px; }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.82); backdrop-filter: blur(6px);
+      display: none; align-items: center; justify-content: center; padding: 16px; z-index: 999999;
+    }
+    .modal-card {
+      background: #282828; color: #ffffff; border: 1px solid #444444; border-radius: 12px;
+      width: 100%; max-width: 360px; padding: 18px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+    }
+    .modal-title { font-size: 1.1rem; font-weight: 700; margin-bottom: 14px; }
+    .form-group { margin-bottom: 12px; }
+    .form-group label { display: block; font-size: 0.75rem; font-weight: 600; margin-bottom: 4px; opacity: 0.85; }
+    .form-input {
+      width: 100%; padding: 8px 10px; border: 1px solid #555555; border-radius: 6px;
+      background: #181818; color: #ffffff; font-size: 0.9rem;
+    }
+    .form-input:focus { outline: none; border-color: #38bdf8; }
+    .grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+    .btn { padding: 8px 14px; border-radius: 6px; font-weight: 600; font-size: 0.82rem; cursor: pointer; border: none; }
+    .btn-save { background: #38bdf8; color: #000; }
+    .btn-cancel { background: rgba(255, 255, 255, 0.12); color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <span class="title" id="displayHeader">Nightscout</span>
+    <button type="button" class="gear-button" id="gearBtn" title="Settings">⚙️</button>
+  </div>
+  <div class="main-content">
+    <div class="setup-box" id="setupBox" style="display: none;">
+      <div style="font-size: 1.8rem;">⚙️</div>
+      <div style="font-weight: 700;">Setup Nightscout</div>
+      <div class="status-text">Click here to enter your Nightscout URL</div>
+    </div>
+    <div class="status-text" id="statusMessage">Checking configuration...</div>
+    <div id="cgmDisplay" style="display: none;">
+      <div class="sgv-container">
+        <span class="sgv-value" id="sgv">--</span>
+        <span class="direction-arrow" id="arrow"></span>
+      </div>
+      <div class="meta-container">
+        <span class="meta-delta" id="delta">--</span>
+        <span>&bull;</span>
+        <span class="meta-age" id="age">--</span>
+      </div>
+      <div class="stats-container" id="extraStats">
+        <div class="stat-pill" id="iobPill">IOB: <span id="iob">--</span></div>
+        <div class="stat-pill" id="cobPill">COB: <span id="cob">--</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal-card">
+      <div class="modal-title">⚙️ Nightscout Settings</div>
+      <div class="form-group">
+        <label>Display Name</label>
+        <input type="text" class="form-input" id="cfgName" placeholder="e.g. Brynn">
+      </div>
+      <div class="form-group">
+        <label>Nightscout URL *</label>
+        <input type="url" class="form-input" id="cfgUrl" placeholder="https://ecker.azurewebsites.net">
+      </div>
+      <div class="form-group">
+        <label>API Token or Secret</label>
+        <input type="password" class="form-input" id="cfgToken" placeholder="homeglow-...">
+      </div>
+      <div class="grid-2col">
+        <div class="form-group">
+          <label>Low Limit</label>
+          <input type="number" class="form-input" id="cfgLow" value="70">
+        </div>
+        <div class="form-group">
+          <label>High Limit</label>
+          <input type="number" class="form-input" id="cfgHigh" value="180">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-cancel" id="btnCancel">Cancel</button>
+        <button type="button" class="btn btn-save" id="btnSave">Save</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const STORAGE_KEY = 'homeglow_nightscout_v1';
+      const ARROWS = {
+        'NONE': '⇼', 'DoubleUp': '⇈', 'SingleUp': '↑', 'FortyFiveUp': '↗',
+        'Flat': '→', 'FortyFiveDown': '↘', 'SingleDown': '↓', 'DoubleDown': '⇊',
+        'NOT COMPUTABLE': '—', 'RATE OUT OF RANGE': '—'
+      };
+      let config = {
+        name: 'Brynn',
+        url: '',
+        token: '',
+        low: 70,
+        high: 180
+      };
+      function loadConfig() {
+        try {
+          const stored = localStorage.getItem(STORAGE_KEY);
+          if (stored) Object.assign(config, JSON.parse(stored));
+        } catch (e) {}
+      }
+      function saveConfig() {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(config)); } catch (e) {}
+      }
+      const modal = document.getElementById('settingsModal');
+      const setupBox = document.getElementById('setupBox');
+      const statusMessage = document.getElementById('statusMessage');
+      const cgmDisplay = document.getElementById('cgmDisplay');
+      const displayHeader = document.getElementById('displayHeader');
+      function showModal() {
+        document.getElementById('cfgName').value = config.name || '';
+        document.getElementById('cfgUrl').value = config.url || '';
+        document.getElementById('cfgToken').value = config.token || '';
+        document.getElementById('cfgLow').value = config.low || 70;
+        document.getElementById('cfgHigh').value = config.high || 180;
+        modal.style.display = 'flex';
+      }
+      function hideModal() { modal.style.display = 'none'; }
+      document.getElementById('gearBtn').addEventListener('click', showModal);
+      setupBox.addEventListener('click', showModal);
+      document.getElementById('btnCancel').addEventListener('click', hideModal);
+      modal.addEventListener('click', (e) => { if (e.target === modal) hideModal(); });
+      document.getElementById('btnSave').addEventListener('click', () => {
+        config.name = document.getElementById('cfgName').value.trim();
+        config.url = document.getElementById('cfgUrl').value.trim().replace(/\/+$/, '');
+        config.token = document.getElementById('cfgToken').value.trim();
+        config.low = parseFloat(document.getElementById('cfgLow').value) || 70;
+        config.high = parseFloat(document.getElementById('cfgHigh').value) || 180;
+        saveConfig();
+        displayHeader.textContent = config.name || 'Nightscout';
+        hideModal();
+        updateView();
+      });
+      async function fetchProxy(targetUrl, headers = {}) {
+        try {
+          const r = await fetch(targetUrl, { headers });
+          if (r.ok) return await r.json();
+        } catch (err) {}
+        const proxyUrl = `/api/proxy?targetUrl=${encodeURIComponent(targetUrl)}`;
+        const r = await fetch(proxyUrl);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return await r.json();
+      }
+      async function fetchCGM() {
+        statusMessage.textContent = 'Connecting...';
+        let targetUrl = `${config.url}/api/v1/entries.json?count=2`;
+        const headers = { 'Accept': 'application/json' };
+        if (config.token) {
+          if (config.token.includes('-') || config.token.length > 20) {
+            targetUrl += `&token=${encodeURIComponent(config.token)}`;
+          } else {
+            headers['api-secret'] = config.token;
+          }
+        }
+        try {
+          const entries = await fetchProxy(targetUrl, headers);
+          if (!Array.isArray(entries) || entries.length === 0) {
+            showError('No CGM data found.');
+            return;
+          }
+          let iob = null, cob = null;
+          try {
+            let pebbleUrl = `${config.url}/pebble`;
+            if (config.token && (config.token.includes('-') || config.token.length > 20)) {
+              pebbleUrl += `?token=${encodeURIComponent(config.token)}`;
+            }
+            const pebble = await fetchProxy(pebbleUrl, headers);
+            if (pebble.bgs && pebble.bgs.length > 0) {
+              iob = pebble.bgs[0].iob;
+              cob = pebble.bgs[0].cob;
+            }
+          } catch (_) {}
+          render(entries[0], entries[1] || null, iob, cob);
+        } catch (err) {
+          showError(`Failed: ${err.message}`);
+        }
+      }
+      function render(cur, prev, iob, cob) {
+        statusMessage.style.display = 'none';
+        setupBox.style.display = 'none';
+        cgmDisplay.style.display = 'block';
+        const sgvEl = document.getElementById('sgv');
+        const arrowEl = document.getElementById('arrow');
+        const deltaEl = document.getElementById('delta');
+        const ageEl = document.getElementById('age');
+        const sgv = cur.sgv;
+        sgvEl.textContent = sgv != null ? sgv : '--';
+        arrowEl.textContent = ARROWS[cur.direction] || '→';
+        let delta = 0;
+        if (cur.delta != null) delta = cur.delta;
+        else if (prev && prev.sgv != null) delta = cur.sgv - prev.sgv;
+        deltaEl.textContent = `${delta > 0 ? '+' : ''}${Math.round(delta)} mg/dL`;
+        const readingTime = new Date(cur.date || cur.dateString);
+        const ageMin = Math.max(0, Math.floor((Date.now() - readingTime.getTime()) / 60000));
+        ageEl.textContent = ageMin === 0 ? 'just now' : `${ageMin}m ago`;
+        sgvEl.className = 'sgv-value';
+        if (ageMin >= 15) sgvEl.classList.add('stale');
+        else if (sgv <= 54) sgvEl.classList.add('color-urgent');
+        else if (sgv < config.low) sgvEl.classList.add('color-low');
+        else if (sgv > config.high) sgvEl.classList.add('color-high');
+        else sgvEl.classList.add('color-in-range');
+        const extraStats = document.getElementById('extraStats');
+        if (iob == null && cob == null) {
+          extraStats.style.display = 'none';
+        } else {
+          extraStats.style.display = 'flex';
+          document.getElementById('iob').textContent = iob != null ? `${parseFloat(iob).toFixed(1)}u` : '--';
+          document.getElementById('cob').textContent = cob != null ? `${Math.round(cob)}g` : '--';
+        }
+      }
+      function showError(text) {
+        statusMessage.textContent = text;
+        statusMessage.style.display = 'block';
+        cgmDisplay.style.display = 'none';
+      }
+      function updateView() {
+        if (!config.url) {
+          statusMessage.style.display = 'none';
+          cgmDisplay.style.display = 'none';
+          setupBox.style.display = 'flex';
+        } else {
+          setupBox.style.display = 'none';
+          fetchCGM();
+        }
+      }
+      loadConfig();
+      displayHeader.textContent = config.name || 'Nightscout';
+      updateView();
+      setInterval(() => { if (config.url) fetchCGM(); }, 60000);
+    })();
+  </script>
+</body>
+</html>

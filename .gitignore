@@ -38,3 +38,15 @@ server/data/.encryption-key
 # files themselves are copied out and published from that repo.
 /plugins/*
 !/plugins/README.md
+
+# Local runtime & credentials protection
+.env
+*.env
+*.token
+*.key
+*.db
+*.sqlite
+data/
+homeglow/
+server/data/
+client/data/

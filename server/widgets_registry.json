@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "id": "nightscout",
+    "name": "Nightscout CGM",
+    "filename": "nightscout.html",
+    "description": "Real-time blood glucose, trend arrows, delta, IOB, and COB.",
+    "author": "Custom",
+    "version": "1.0.0"
+  }
+]
