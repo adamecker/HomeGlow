@@ -30,7 +30,7 @@ import {
   RadioGroup,
   Radio,
   Grid
-} from '@mui/material';
+, Checkbox, ListItemText } from "@mui/material";
 import {
   Add,
   Edit,
@@ -191,7 +191,7 @@ function buildDueDateFromOffset(createdAt, dueDays) {
 
 const defaultScheduleForm = {
   chore_id: '',
-  user_id: '',
+  user_id: '', user_ids: [],
   scheduleMode: 'preset',
   selectedPreset: '0 0 * * *',
   selectedDays: [],
@@ -363,9 +363,10 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
         return;
       }
 
-      const payload = {
-        chore_id: scheduleForm.chore_id,
-        user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id,
+      const isMultiCreate = !editingSchedule && Array.isArray(scheduleForm.user_ids) && scheduleForm.user_ids.length > 0;
+    const payload = {
+      chore_id: scheduleForm.chore_id,
+      ...(isMultiCreate ? { user_ids: scheduleForm.user_ids } : { user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id }),
         crontab: cron || null,
         duration: !scheduleForm.isOneTime ? scheduleForm.duration : 'day-of',
         interval: normalizedInterval,
@@ -870,17 +871,68 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
               </Select>
             </FormControl>
 
-            <FormControl fullWidth size="small">
-              <InputLabel>{t('chores:schedules.assignedTo')}</InputLabel>
-              <Select
-                value={scheduleForm.user_id}
-                label={t('chores:schedules.assignedTo')}
-                onChange={(e) => updateScheduleForm({ user_id: e.target.value })}
-              >
-                <MenuItem value="">{t('chores:schedules.unassignedBonusChore')}</MenuItem>
-                {users.map(u => <MenuItem key={u.id} value={u.id}>{u.username}</MenuItem>)}
-              </Select>
-            </FormControl>
+            {!editingSchedule ? (
+              <Box>
+                <FormControl fullWidth size="small">
+                  <InputLabel id="multi-user-label">Assign to Users</InputLabel>
+                  <Select
+                    labelId="multi-user-label"
+                    multiple
+                    value={scheduleForm.user_ids}
+                    onChange={(e) => {
+                      const val = typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value;
+                      setScheduleForm({ ...scheduleForm, user_ids: val });
+                    }}
+                    label="Assign to Users"
+                    renderValue={(selected) => (
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {selected.map((uid) => {
+                          const u = users.find(user => user.id === uid);
+                          return <Chip key={uid} size="small" label={u ? u.username : uid} />;
+                        })}
+                      </Box>
+                    )}
+                  >
+                    {users.map((u) => (
+                      <MenuItem key={u.id} value={u.id}>
+                        <Checkbox checked={scheduleForm.user_ids.indexOf(u.id) > -1} />
+                        <ListItemText primary={u.username} />
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 0.5 }}>
+                  <Button
+                    size="small"
+                    sx={{ fontSize: '0.75rem', py: 0 }}
+                    onClick={() => setScheduleForm({ ...scheduleForm, user_ids: users.map(u => u.id) })}
+                  >
+                    Select All
+                  </Button>
+                  <Button
+                    size="small"
+                    sx={{ fontSize: '0.75rem', py: 0 }}
+                    onClick={() => setScheduleForm({ ...scheduleForm, user_ids: [] })}
+                  >
+                    Clear
+                  </Button>
+                </Box>
+              </Box>
+            ) : (
+              <FormControl fullWidth size="small">
+                <InputLabel>{t('chores:schedules.user')}</InputLabel>
+                <Select
+                  value={scheduleForm.user_id}
+                  label={t('chores:schedules.user')}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, user_id: e.target.value })}
+                >
+                  <MenuItem value=""><em>{t('chores:schedules.unassigned')}</em></MenuItem>
+                  {users.map(u => (
+                    <MenuItem key={u.id} value={u.id}>{u.username}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            )}
 
             <Divider />
 

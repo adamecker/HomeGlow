@@ -81,7 +81,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
   const [history, setHistory] = useState([]);
   const [prizes, setPrizes] = useState([]);
   const [newChore, setNewChore] = useState({
-    user_id: '',
+    user_id: '', user_ids: [],
     title: '',
     description: '',
     assigned_days_of_week: ['monday'],
@@ -851,15 +851,16 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
       const choreId = choreResponse.data.id;
       const crontab = newChore.is_one_time ? null : convertDaysToCrontab(newChore.assigned_days_of_week);
 
-      await axios.post(`${API_BASE_URL}/api/chore-schedules`, {
-        chore_id: choreId,
-        user_id: newChore.user_id || null,
+      const uIds = Array.isArray(newChore.user_ids) && newChore.user_ids.length > 0 ? newChore.user_ids : [newChore.user_id || null];
+  await axios.post(`${API_BASE_URL}/api/chore-schedules`, {
+    chore_id: choreId,
+    user_ids: uIds,
         crontab: crontab,
         visible: 1
       });
 
       setNewChore({
-        user_id: '',
+        user_id: '', user_ids: [],
         title: '',
         description: '',
         assigned_days_of_week: ['monday'],
@@ -1696,20 +1697,52 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
                 onChange={(icon) => setNewChore({ ...newChore, icon })}
               />
             </Box>
-            <FormControl fullWidth sx={{ mb: 2 }}>
-              <InputLabel>{t('chores:add.assignToUser')}</InputLabel>
+            <Box sx={{ mt: 1, mb: 1 }}>
+            <FormControl fullWidth margin="dense" size="small">
+              <InputLabel id="quick-add-users-label">Assign To</InputLabel>
               <Select
-                value={newChore.user_id}
-                onChange={(e) => setNewChore({ ...newChore, user_id: e.target.value })}
+                labelId="quick-add-users-label"
+                multiple
+                value={newChore.user_ids || []}
+                onChange={(e) => {
+                  const val = typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value;
+                  setNewChore({ ...newChore, user_ids: val });
+                }}
+                label="Assign To"
+                renderValue={(selected) => (
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                    {selected.map((uid) => {
+                      const u = users.find(user => user.id === uid);
+                      return <Chip key={uid} size="small" label={u ? u.username : uid} />;
+                    })}
+                  </Box>
+                )}
               >
-                <MenuItem value={0}>{t('chores:add.bonusChoreUnassigned')}</MenuItem>
-                {users.map(user => (
-                  <MenuItem key={user.id} value={user.id}>
-                    {user.username}
+                {users.map((u) => (
+                  <MenuItem key={u.id} value={u.id}>
+                    <Checkbox checked={(newChore.user_ids || []).indexOf(u.id) > -1} />
+                    <ListItemText primary={u.username} />
                   </MenuItem>
                 ))}
               </Select>
             </FormControl>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 0.5 }}>
+              <Button
+                size="small"
+                sx={{ fontSize: '0.75rem', py: 0 }}
+                onClick={() => setNewChore({ ...newChore, user_ids: users.map(u => u.id) })}
+              >
+                All Kids
+              </Button>
+              <Button
+                size="small"
+                sx={{ fontSize: '0.75rem', py: 0 }}
+                onClick={() => setNewChore({ ...newChore, user_ids: [] })}
+              >
+                Clear
+              </Button>
+            </Box>
+          </Box>
 
             <Box sx={{ mb: 2 }}>
               <FormControlLabel
