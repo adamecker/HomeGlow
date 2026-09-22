@@ -12,6 +12,14 @@ async function uploadBackupToDrive(db, accountId, dbPath) {
     throw new Error('Database file not found for backup.');
   }
 
+  // Force SQLite to flush all WAL changes into the main tasks.db file
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    console.log('[DriveBackup] Successfully checkpointed WAL into main database.');
+  } catch (ckptErr) {
+    console.warn('[DriveBackup] WAL checkpoint warning:', ckptErr.message);
+  }
+
   const accessToken = await googleConnection.getValidAccessToken(db, accountId);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `homeglow-backup-${timestamp}.db`;

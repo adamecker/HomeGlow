@@ -208,7 +208,7 @@ const defaultScheduleForm = {
   sound: '',
   reminder_interval_minutes: '',
   transferable: true,
-  can_snooze: true
+  can_snooze: true, calendar_match: ''
 };
 
 const defaultChoreForm = { title: '', description: '', clam_value: 0, icon: '' };
@@ -330,7 +330,8 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
       reminder_interval_minutes: schedule.reminder_interval_minutes ? String(schedule.reminder_interval_minutes) : '',
       // Pre-migration rows may lack these columns; treat missing as enabled.
       transferable: schedule.transferable === undefined ? true : !!schedule.transferable,
-      can_snooze: schedule.can_snooze === undefined ? true : !!schedule.can_snooze
+      can_snooze: schedule.can_snooze === undefined ? true : !!schedule.can_snooze,
+      calendar_match: schedule.calendar_match || ''
     });
     setCrontabError(null);
     setScheduleDialogOpen(true);
@@ -379,7 +380,8 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
           ? parseInt(scheduleForm.reminder_interval_minutes, 10)
           : null,
         transferable: scheduleForm.transferable ? 1 : 0,
-        can_snooze: scheduleForm.can_snooze ? 1 : 0
+        can_snooze: scheduleForm.can_snooze ? 1 : 0,
+        calendar_match: scheduleForm.scheduleMode === 'calendar' ? scheduleForm.calendar_match.trim() : null
       };
 
       if (editingSchedule) {
@@ -689,7 +691,9 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                       editing the schedule. */}
                   <TableCell data-label={t('chores:schedules.nextOccurrence')}>
                     <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                      {getNextOccurrence(s.crontab)}
+                      {s.calendar_match ? (
+                      <Chip label={`📅 On: "${s.calendar_match}"`} size="small" color={s.calendar_matched_today ? "success" : "default"} variant="outlined" />
+                    ) : getNextOccurrence(s.crontab)}
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.duration')}>
@@ -956,6 +960,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                   <FormControlLabel value="preset" control={<Radio size="small" />} label={t('chores:schedules.modePreset')} />
                   <FormControlLabel value="days" control={<Radio size="small" />} label={t('chores:schedules.modeDaysOfWeek')} />
                   <FormControlLabel value="custom" control={<Radio size="small" />} label={t('chores:schedules.modeCustomCrontab')} />
+                  <FormControlLabel value="calendar" control={<Radio size="small" />} label="Calendar Event" />
                 </RadioGroup>
 
                 <FormControl fullWidth size="small">
@@ -1083,6 +1088,21 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                     helperText={crontabError || 'Format: minute hour day-of-month month day-of-week'}
                     InputProps={{ sx: { fontFamily: 'monospace' } }}
                   />
+                )}
+
+                {scheduleForm.scheduleMode === 'calendar' && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Event Title Contains..."
+                      value={scheduleForm.calendar_match}
+                      onChange={(e) => updateScheduleForm({ calendar_match: e.target.value })}
+                      placeholder="e.g. Columbia - Practice, Gymnastics"
+                      helperText="Triggers on days when any enabled calendar has an event containing this text. Automatically inherits the event's start time as due time."
+                      required
+                    />
+                  </Box>
                 )}
               </>
             )}

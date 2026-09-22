@@ -2126,7 +2126,7 @@ async function dailyBackgroundProcessing() {
             chore_id, user_id, crontab, duration, visible, parent_schedule_id,
             due_date, due_time, sound_enabled, sound, reminder_interval_minutes
           )
-          VALUES (?, ?, NULL, 'day-of', 1, ?, ?, ?, ?, ?, ?)
+          VALUES (?, ?, NULL, 'day-of', 1, ?, ?, ?, ?, ?, ?, ?)
           RETURNING *
         `).get(
           schedule.chore_id,
@@ -2601,6 +2601,31 @@ fastify.delete('/api/chores/:id', async (request, reply) => {
 
 // Chore Schedules routes
 fastify.get('/api/chore-schedules', async (request, reply) => {
+    // Helper to evaluate calendar match for today
+    const todayStr = getTodayLocalDateString();
+    const todayEvents = db.prepare(`
+      SELECT title, start_time, all_day
+      FROM calendar_events_cache
+      WHERE source_id IN (SELECT id FROM calendar_sources WHERE enabled = 1)
+        AND date(start_time, 'localtime') = ?
+    `).all(todayStr);
+
+    const checkCalendarMatch = (matchStr) => {
+      if (!matchStr) return null;
+      const target = matchStr.toLowerCase().trim();
+      for (const ev of todayEvents) {
+        if (ev.title && ev.title.toLowerCase().includes(target)) {
+          let dueTime = null;
+          if (!ev.all_day && ev.start_time) {
+            const d = new Date(ev.start_time);
+            dueTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+          }
+          return { matched: true, eventTitle: ev.title, dueTime };
+        }
+      }
+      return { matched: false };
+    };
+
   try {
     const { user_id, visible, usage, chore_id } = request.query;
     let query = 'SELECT cs.*, c.title, c.description, c.clam_value, c.icon FROM chore_schedules cs JOIN chores c ON cs.chore_id = c.id';
@@ -2656,10 +2681,10 @@ fastify.post('/api/chore-schedules', async (request, reply) => {
     const body = request.body || {};
     // Multi-user batch support
     if (Array.isArray(body.user_ids) && body.user_ids.length > 0) {
-      const { chore_id, crontab, duration, interval, visible, due_date, due_time, sound_enabled, sound, reminder_interval_minutes, transferable, can_snooze } = body;
+      const { chore_id, crontab, duration, interval, visible, due_date, due_time, sound_enabled, sound, reminder_interval_minutes, transferable, can_snooze, calendar_match } = body;
       const insertStmt = db.prepare(`
-        INSERT INTO chore_schedules (chore_id, user_id, crontab, duration, interval, visible, due_date, due_time, sound_enabled, sound, reminder_interval_minutes, transferable, can_snooze)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO chore_schedules (chore_id, user_id, crontab, duration, interval, visible, due_date, due_time, sound_enabled, sound, reminder_interval_minutes, transferable, can_snooze, calendar_match)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const ids = [];
       const runTx = db.transaction((uIds) => {
@@ -2677,7 +2702,8 @@ fastify.post('/api/chore-schedules', async (request, reply) => {
             sound || null,
             reminder_interval_minutes || null,
             transferable !== undefined ? (transferable ? 1 : 0) : 1,
-            can_snooze !== undefined ? (can_snooze ? 1 : 0) : 1
+            can_snooze !== undefined ? (can_snooze ? 1 : 0) : 1,
+            calendar_match ? String(calendar_match).trim() : null
           );
           ids.push(res.lastInsertRowid);
         }
@@ -2783,7 +2809,7 @@ fastify.post('/api/chore-schedules/bulk', async (request, reply) => {
       }
     }
 
-    const stmt = db.prepare('INSERT INTO chore_schedules (chore_id, user_id, crontab, visible, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const stmt = db.prepare('INSERT INTO chore_schedules (chore_id, user_id, crontab, visible, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze, calendar_match) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     const ids = [];
 
     for (const user_id of user_ids) {
