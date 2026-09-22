@@ -1,3 +1,4 @@
+import GoogleDriveBackupSection from "./GoogleDriveBackupSection.jsx";
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -349,7 +350,9 @@ const GoogleAccountConnection = ({ onMessage }) => {
           </Button>
         </Box>
       )}
-    </Box>
+    
+    <GoogleDriveBackupSection />
+  </Box>
   );
 };
 

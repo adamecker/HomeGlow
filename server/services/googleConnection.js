@@ -5,7 +5,8 @@ const GOOGLE_SCOPES = [
     'openid',
     'email',
     'profile',
-    'https://www.googleapis.com/auth/calendar',
+    'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/calendar',
     'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
     'https://www.googleapis.com/auth/photospicker.mediaitems.readonly',
 ];
