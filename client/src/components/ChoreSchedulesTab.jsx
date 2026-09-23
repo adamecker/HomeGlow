@@ -573,7 +573,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                   </TableCell>
                   <TableCell data-label={t('common:labels.description')}>
                     <Typography variant="body2" color="text.secondary">
-                      {c.description || <em style={{ opacity: 0.5 }}>{t('chores:schedules.noDescription')}</em>}
+                      <Box component="span" sx={{ whiteSpace: "pre-line" }}>{c.description || <em style={{ opacity: 0.5 }}>{t('chores:schedules.noDescription')}</em>}</Box>
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.clams')}>
@@ -677,7 +677,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                     <Box>
                       <Typography variant="body2" fontWeight="bold">{s.title}</Typography>
                       {s.description && (
-                        <Typography variant="caption" color="text.secondary">{s.description}</Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-line" }}>{s.description}</Typography>
                       )}
                     </Box>
                   </TableCell>

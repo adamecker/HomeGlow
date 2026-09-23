@@ -1064,8 +1064,8 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
             )}
           </Typography>
           {schedule.description && (
-            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-              {schedule.description}
+            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }} sx={{ whiteSpace: "pre-line", wordBreak: "break-word" }}>
+              <Box component="span" sx={{ whiteSpace: "pre-line", display: "block" }}>{schedule.description}</Box>
             </Typography>
           )}
         </Box>
@@ -1340,8 +1340,8 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
                           />
                         </Typography>
                         {schedule.description && (
-                          <Typography variant="caption" color="text.secondary">
-                            {schedule.description}
+                          <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-line", wordBreak: "break-word" }}>
+                            <Box component="span" sx={{ whiteSpace: "pre-line", display: "block" }}>{schedule.description}</Box>
                           </Typography>
                         )}
                         <Box sx={{ mt: 1, display: 'flex', gap: 1, flexWrap: 'wrap' }}>
@@ -1938,7 +1938,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
             <Typography variant="h6" sx={{ mb: 1 }}>
               {t('chores:visibility.heading')}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }} sx={{ whiteSpace: "pre-line", wordBreak: "break-word" }}>
               {t('chores:visibility.helper')}
             </Typography>
             {users.length === 0 ? (
