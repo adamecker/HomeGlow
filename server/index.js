@@ -525,6 +525,12 @@ function decryptPassword(encryptedPassword) {
 }
 
 // Initialize Fastify with CORS
+
+fastify.post('/api/client-error', async (request, reply) => {
+  console.error('\n🔴 [CLIENT CRASH REPORT]:\n', JSON.stringify(request.body, null, 2), '\n');
+  return { ok: true };
+});
+
 fastify.register(require('@fastify/cors'), {
   origin: '*', // Allow all origins for development. Consider restricting in production.
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow PATCH
@@ -2656,6 +2662,23 @@ fastify.get('/api/chore-schedules', async (request, reply) => {
     }
 
     const rows = db.prepare(query).all(...params);
+
+    for (const s of rows) {
+      if (s.calendar_match) {
+        const match = checkCalendarMatch(s.calendar_match);
+        if (match && match.matched) {
+          s.calendar_matched_today = 1;
+          if (match.dueTime && !s.due_time) {
+            s.due_time = match.dueTime;
+          }
+        } else {
+          s.calendar_matched_today = 0;
+        }
+      } else {
+        s.calendar_matched_today = 0;
+      }
+    }
+
     return rows;
   } catch (error) {
     console.error('Error fetching chore schedules:', error);

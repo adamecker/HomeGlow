@@ -287,8 +287,9 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const openEditSchedule = (schedule) => {
     setEditingSchedule(schedule);
-    const isOneTime = !schedule.crontab;
-    let scheduleMode = 'preset';
+    const isCalendar = !!schedule.calendar_match;
+    const isOneTime = !schedule.crontab && !isCalendar;
+    let scheduleMode = isCalendar ? 'calendar' : 'preset';
     let selectedPreset = '0 0 * * *';
     let selectedDays = [];
     let customCrontab = '';
@@ -344,7 +345,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const handleSaveSchedule = async () => {
     const cron = computeCrontab(scheduleForm);
-    const err = scheduleForm.isOneTime ? null : validateCrontab(cron);
+    const err = (scheduleForm.isOneTime || scheduleForm.scheduleMode === 'calendar') ? null : validateCrontab(cron);
     if (err) { setCrontabError(err); return; }
 
     setSavingSchedule(true);
@@ -488,7 +489,9 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
   });
 
   const currentCrontab = computeCrontab(scheduleForm);
-  const nextOccurrence = getNextOccurrence(currentCrontab);
+  const nextOccurrence = scheduleForm.scheduleMode === 'calendar'
+    ? (scheduleForm.calendar_match ? `When event matches "${scheduleForm.calendar_match}"` : 'When matching event occurs')
+    : getNextOccurrence(currentCrontab);
   const isOnceCompletedMissingInterval = !scheduleForm.isOneTime
     && scheduleForm.duration === 'once-completed'
     && !(Number.isInteger(Number.parseInt(scheduleForm.sleepCount, 10)) && Number.parseInt(scheduleForm.sleepCount, 10) > 0);
@@ -1099,7 +1102,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                       value={scheduleForm.calendar_match}
                       onChange={(e) => updateScheduleForm({ calendar_match: e.target.value })}
                       placeholder="e.g. Columbia - Practice, Gymnastics"
-                      helperText="Triggers on days when any enabled calendar has an event containing this text. Automatically inherits the event's start time as due time."
+                      helperText="Triggers on days matching this event. The chore is due at the event start time and remains visible for the entire day."
                       required
                     />
                   </Box>
