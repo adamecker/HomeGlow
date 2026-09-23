@@ -1,15 +1,3 @@
-// OpenWeatherMap weather provider (issue #57).
-//
-// This is a move, not a rewrite: the geocoding cascade, the fetch sequence, and
-// the 3-hour-to-daily rollup all come from what WeatherWidget.jsx used to do in
-// the browser. The behaviour is preserved deliberately — including the ",US"
-// retry and the postal-code fallback, which exist because of issue #80 — so
-// households that already have a working location string keep it working.
-//
-// What changed is only where it runs and what it emits: the API key now stays
-// on the server, and the result is normalized to the shared payload contract
-// instead of the raw OpenWeatherMap response.
-
 const { buildPayload } = require('./payload');
 
 const GEO_BASE = 'https://api.openweathermap.org/geo/1.0';
@@ -17,23 +5,19 @@ const DATA_BASE = 'https://api.openweathermap.org/data/2.5';
 
 const REQUEST_TIMEOUT_MS = 15000;
 
-// OpenWeatherMap condition ids -> the shared vocabulary. Ranges follow OWM's
-// documented groups; the exceptions inside each range are the ones worth
-// distinguishing on a family dashboard (a downpour should not look like drizzle).
 function conditionFromOwm(id, iconCode) {
     const code = Number(id);
     const isNight = typeof iconCode === 'string' && iconCode.endsWith('n');
 
     if (code >= 200 && code < 300) {
-        // 2xx thunderstorm — the "with rain" variants carry rain too.
         return code === 210 || code === 211 || code === 212 || code === 221
             ? 'lightning'
             : 'lightning-rainy';
     }
-    if (code >= 300 && code < 400) return 'rainy';           // drizzle
+    if (code >= 300 && code < 400) return 'rainy';
     if (code >= 500 && code < 600) {
         if (code === 502 || code === 503 || code === 504) return 'pouring';
-        if (code === 511) return 'snowy-rainy';              // freezing rain
+        if (code === 511) return 'snowy-rainy';
         return 'rainy';
     }
     if (code >= 600 && code < 700) {
@@ -41,7 +25,7 @@ function conditionFromOwm(id, iconCode) {
         return 'snowy';
     }
     if (code >= 700 && code < 800) {
-        if (code === 771 || code === 781) return 'windy';     // squall, tornado
+        if (code === 771 || code === 781) return 'windy';
         return 'fog';
     }
     if (code === 800) return isNight ? 'clear-night' : 'sunny';
@@ -91,9 +75,6 @@ async function owmFetch(url) {
     return parsed;
 }
 
-// Preserved from the client: try the query as given, then again qualified with
-// ",US" (unless it already names a country), then as a postal code. Lifted from
-// WeatherWidget.getDirectGeocodeCandidates.
 function geocodeCandidates(locationQuery) {
     const base = String(locationQuery || '').trim();
     if (!base) return [];
@@ -108,8 +89,6 @@ function geocodeCandidates(locationQuery) {
     return candidates;
 }
 
-// A query with no letters is treated as a postal code — same heuristic the
-// client used.
 const looksLikePostalCode = (candidate) => {
     const normalized = String(candidate || '').trim();
     return !!normalized && !/[a-z]/i.test(normalized);
@@ -151,22 +130,17 @@ async function resolveCoordinates(locationQuery, apiKey) {
     throw notFound();
 }
 
-// Roll OpenWeatherMap's 3-hourly list into daily highs/lows plus the hourly
-// series the chart uses. Mirrors the old client reducer, but keys days by their
-// local date string rather than Date.toDateString() so the grouping is stable
-// and serializable.
-function summarizeForecast(list, timezoneOffsetSeconds) {
+function summarizeForecast(list, timezoneOffsetSeconds, maxHourly = 8) {
     const byDay = new Map();
     const hourly = [];
 
     for (const item of list) {
-        // OWM gives dt in UTC plus the location's offset; shifting by the offset
-        // puts the bucket boundary at the location's midnight, not the server's.
         const shifted = new Date((item.dt + (timezoneOffsetSeconds || 0)) * 1000);
         const dayKey = shifted.toISOString().slice(0, 10);
 
         const existing = byDay.get(dayKey);
         const precipitation = item.rain ? item.rain['3h'] || 0 : 0;
+        const pop = typeof item.pop === 'number' ? Math.round(item.pop * 100) : 0;
 
         if (!existing) {
             byDay.set(dayKey, {
@@ -176,33 +150,30 @@ function summarizeForecast(list, timezoneOffsetSeconds) {
                 condition: conditionFromOwm(item.weather?.[0]?.id, item.weather?.[0]?.icon),
                 description: item.weather?.[0]?.description || null,
                 precipitation,
+                pop,
             });
         } else {
             existing.high = Math.max(existing.high, item.main.temp_max);
             existing.low = Math.min(existing.low, item.main.temp_min);
             existing.precipitation += precipitation;
+            existing.pop = Math.max(existing.pop, pop);
         }
 
-        if (hourly.length < 8) {
+        if (hourly.length < maxHourly) {
             hourly.push({
                 timestamp: item.dt,
                 temp: item.main.temp,
                 precipitation,
+                pop,
+                date: dayKey,
+                condition: conditionFromOwm(item.weather?.[0]?.id, item.weather?.[0]?.icon),
             });
         }
     }
 
-    return { forecast: Array.from(byDay.values()).slice(0, 3), hourly };
+    return { forecast: Array.from(byDay.values()), hourly };
 }
 
-/**
- * @param {object} options
- * @param {string} options.apiKey
- * @param {string} [options.locationQuery] resolved via geocoding when no coordinates are given
- * @param {{lat:number, lon:number}} [options.coordinates] skips geocoding when present
- * @param {'imperial'|'metric'} options.units
- * @param {string} options.lang OpenWeatherMap language code
- */
 async function fetchWeather({ apiKey, locationQuery, coordinates, units, lang }) {
     if (!apiKey) {
         const err = new Error('OpenWeatherMap API key is not configured.');
@@ -219,10 +190,6 @@ async function fetchWeather({ apiKey, locationQuery, coordinates, units, lang })
 
     const current = await owmFetch(`${DATA_BASE}/weather?${common}`);
 
-    // Air quality and forecast are enrichments — a failure in either should
-    // degrade the widget, not empty it. The old client code took the same
-    // stance for air quality; extending it to the forecast means a partial
-    // outage still shows current conditions.
     const [airQualityResult, forecastResult] = await Promise.allSettled([
         owmFetch(`${DATA_BASE}/air_pollution?lat=${lat}&lon=${lon}&appid=${apiKey}`),
         owmFetch(`${DATA_BASE}/forecast?${common}`),
@@ -244,9 +211,11 @@ async function fetchWeather({ apiKey, locationQuery, coordinates, units, lang })
     let forecast = [];
     let hourly = [];
     if (forecastResult.status === 'fulfilled' && Array.isArray(forecastResult.value?.list)) {
+        // Pass Infinity so production gets all available forecast points across all days
         const summarized = summarizeForecast(
-            forecastResult.value.list.slice(0, 24),
-            forecastResult.value.city?.timezone
+            forecastResult.value.list,
+            forecastResult.value.city?.timezone,
+            Infinity
         );
         forecast = summarized.forecast;
         hourly = summarized.hourly;
@@ -276,7 +245,6 @@ async function fetchWeather({ apiKey, locationQuery, coordinates, units, lang })
 
 module.exports = {
     fetchWeather,
-    // exported for tests
     conditionFromOwm,
     geocodeCandidates,
     resolveCoordinates,
