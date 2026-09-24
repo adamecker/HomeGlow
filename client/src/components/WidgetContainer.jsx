@@ -73,9 +73,9 @@ const WidgetContainer = ({
   const layoutTabRef = useRef(null);
   const resizeTapGuardRef = useRef(new Map());
 
-  const saveLayoutsToApi = useCallback((layoutItems, tabNumber, cols) => {
+  const saveLayoutsToApi = useCallback((layoutItems, tabNumber, cols, immediate = false) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
+    const doSave = () => {
       // Persist in normalized (12-col) units so layouts round-trip across breakpoints.
       const layouts = layoutItems
         .filter(item => resolveWidgetName(item.i))
@@ -94,8 +94,14 @@ const WidgetContainer = ({
       if (layouts.length > 0) {
         axios.patch(`${API_DEVICE_URL}/widget-assignments/layout/bulk`, { layouts }).catch(() => { });
       }
-    }, 500);
-  }, []);
+    };
+
+    if (immediate) {
+      doSave();
+    } else {
+      saveTimerRef.current = setTimeout(doSave, 500);
+    }
+  }, [API_DEVICE_URL]);
 
   // Update container width and grid columns based on screen size
   useEffect(() => {
@@ -124,26 +130,26 @@ const WidgetContainer = ({
     return () => window.removeEventListener('resize', updateDimensions);
   }, []);
 
+  const prevSavedLayoutKeyRef = useRef('');
+
   useEffect(() => {
     lockedRef.current = locked;
   }, [locked]);
 
   useEffect(() => {
-    const currentCacheKey = `${activeTab}:${widgets.map(w => w.id).sort().join(',')}`;
-    const widgetsChanged = currentCacheKey !== prevWidgetIdsRef.current;
+    const widgetIdsKey = `${activeTab}:${widgets.map(w => w.id).sort().join(',')}`;
+    const savedLayoutKey = widgets.map(w => `${w.id}:${w.savedLayout ? `${w.savedLayout.x},${w.savedLayout.y},${w.savedLayout.w},${w.savedLayout.h}` : 'none'}`).sort().join(';');
+    const widgetIdsChanged = widgetIdsKey !== prevWidgetIdsRef.current;
+    const savedLayoutChanged = savedLayoutKey !== prevSavedLayoutKeyRef.current;
     const prevCols = prevGridColsRef.current;
     const colsChanged = prevCols != null && prevCols !== gridCols;
 
-    // First paint / widget-set changes rebuild from saved (12-col) layouts.
-    // Column-only changes rescale the live layout so resize affordances stay correct.
-    if (!widgetsChanged && !colsChanged) {
-      prevGridColsRef.current = gridCols;
-      return;
-    }
+    prevWidgetIdsRef.current = widgetIdsKey;
+    prevSavedLayoutKeyRef.current = savedLayoutKey;
 
-    if (widgetsChanged) {
-      prevWidgetIdsRef.current = currentCacheKey;
+    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || (savedLayoutChanged && lockedRef.current);
 
+    if (shouldRebuildLayout) {
       const initialLayout = buildLayout(widgets, gridCols, lockedRef.current);
       setLayout(initialLayout);
       layoutTabRef.current = activeTab;
@@ -159,7 +165,7 @@ const WidgetContainer = ({
     }
 
     prevGridColsRef.current = gridCols;
-  }, [widgets, activeTab, gridCols]);
+  }, [widgets, activeTab, gridCols, layout.length]);
 
   useEffect(() => {
     const wasLocked = prevLockedRef.current;
@@ -182,7 +188,7 @@ const WidgetContainer = ({
         && locked
         && layoutTabRef.current === activeTab;
       if (shouldPersistLockedLayouts) {
-        saveLayoutsToApi(updatedLayout, activeTab, gridCols);
+        saveLayoutsToApi(updatedLayout, activeTab, gridCols, true);
       }
 
       return updatedLayout;
@@ -482,6 +488,7 @@ const WidgetContainer = ({
   const gridLayout = useMemo(() => {
     const built = buildLayout(widgets, gridCols, locked);
     if (layoutTabRef.current !== activeTab) return built;
+    if (locked) return built;
     return built.map((item) => layout.find((l) => l.i === item.i) || item);
   }, [widgets, layout, gridCols, locked, activeTab]);
 
@@ -553,10 +560,10 @@ const WidgetContainer = ({
               i: widget.id,
               ...layoutItemFromNormalized(
                 {
-                  x: widget.defaultPosition.x,
-                  y: widget.defaultPosition.y,
-                  w: widget.defaultSize.width,
-                  h: widget.defaultSize.height,
+                  x: widget.savedLayout?.x ?? widget.defaultPosition.x,
+                  y: widget.savedLayout?.y ?? widget.defaultPosition.y,
+                  w: widget.savedLayout?.w ?? widget.defaultSize.width,
+                  h: widget.savedLayout?.h ?? widget.defaultSize.height,
                   minW: widget.minWidth || 3,
                   minH: widget.minHeight || 2,
                 },

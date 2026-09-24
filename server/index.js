@@ -4378,11 +4378,7 @@ fastify.patch('/api/devices/:deviceName/widget-assignments/layout', async (reque
     }
 
     const layoutMap = parseTabConfigJson(tab.config_json);
-    const existing = layoutMap[widget_name];
-
-    if (!existing) {
-      return reply.status(404).send({ error: 'Assignment not found' });
-    }
+    const existing = layoutMap[widget_name] || {};
 
     const normalizedLayout = normalizeLayoutFields({
       layout_x: layout_x ?? existing.layout_x,
@@ -4449,11 +4445,7 @@ fastify.patch('/api/devices/:deviceName/widget-assignments/layout/bulk', async (
         continue;
       }
 
-      if (!(widgetName in tabEntry.layoutMap)) {
-        continue;
-      }
-
-      const existingLayout = tabEntry.layoutMap[widgetName];
+      const existingLayout = tabEntry.layoutMap[widgetName] || {};
       tabEntry.layoutMap[widgetName] = {
         ...existingLayout,
         ...normalizeLayoutFields({
