@@ -263,7 +263,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
   const computeCrontab = (f) => {
-    if (f.isOneTime) return '';
+    if (f.isOneTime || f.scheduleMode === 'calendar') return '';
     if (f.scheduleMode === 'preset') return f.selectedPreset;
     if (f.scheduleMode === 'days') return f.selectedDays.length > 0 ? daysToCrontab(f.selectedDays) : '';
     return f.customCrontab;
@@ -273,7 +273,8 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
     setScheduleForm(prev => {
       const next = { ...prev, ...updates };
       const cron = computeCrontab(next);
-      setCrontabError(next.isOneTime ? null : validateCrontab(cron));
+      const isCronExempt = next.isOneTime || next.scheduleMode === 'calendar';
+      setCrontabError(isCronExempt ? null : validateCrontab(cron));
       return next;
     });
   };
@@ -294,7 +295,9 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
     let selectedDays = [];
     let customCrontab = '';
 
-    if (!isOneTime) {
+    if (isCalendar) {
+      scheduleMode = 'calendar';
+    } else if (!isOneTime && schedule.crontab) {
       const preset = CRONTAB_PRESETS.find(p => p.value === schedule.crontab);
       if (preset) {
         scheduleMode = 'preset';
@@ -314,6 +317,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
     setScheduleForm({
       chore_id: schedule.chore_id,
       user_id: schedule.user_id ?? '',
+      user_ids: [],
       scheduleMode,
       selectedPreset,
       selectedDays,
@@ -345,7 +349,8 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const handleSaveSchedule = async () => {
     const cron = computeCrontab(scheduleForm);
-    const err = (scheduleForm.isOneTime || scheduleForm.scheduleMode === 'calendar') ? null : validateCrontab(cron);
+    const isCalendarMode = !scheduleForm.isOneTime && scheduleForm.scheduleMode === 'calendar';
+    const err = (scheduleForm.isOneTime || isCalendarMode) ? null : validateCrontab(cron);
     if (err) { setCrontabError(err); return; }
 
     setSavingSchedule(true);
@@ -366,10 +371,10 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
       }
 
       const isMultiCreate = !editingSchedule && Array.isArray(scheduleForm.user_ids) && scheduleForm.user_ids.length > 0;
-    const payload = {
-      chore_id: scheduleForm.chore_id,
-      ...(isMultiCreate ? { user_ids: scheduleForm.user_ids } : { user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id }),
-        crontab: cron || null,
+      const payload = {
+        chore_id: scheduleForm.chore_id,
+        ...(isMultiCreate ? { user_ids: scheduleForm.user_ids } : { user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id }),
+        crontab: isCalendarMode ? null : (cron || null),
         duration: !scheduleForm.isOneTime ? scheduleForm.duration : 'day-of',
         interval: normalizedInterval,
         visible: scheduleForm.visible ? 1 : 0,
@@ -382,7 +387,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
           : null,
         transferable: scheduleForm.transferable ? 1 : 0,
         can_snooze: scheduleForm.can_snooze ? 1 : 0,
-        calendar_match: scheduleForm.scheduleMode === 'calendar' ? scheduleForm.calendar_match.trim() : null
+        calendar_match: isCalendarMode ? (scheduleForm.calendar_match?.trim() || null) : null
       };
 
       if (editingSchedule) {
@@ -503,8 +508,10 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const isScheduleSaveDisabled = savingSchedule
     || !scheduleForm.chore_id
-    || (!scheduleForm.isOneTime && !!crontabError)
+    || (!scheduleForm.isOneTime && scheduleForm.scheduleMode !== 'calendar' && !!crontabError)
     || (!scheduleForm.isOneTime && scheduleForm.scheduleMode === 'custom' && !scheduleForm.customCrontab.trim())
+    || (!scheduleForm.isOneTime && scheduleForm.scheduleMode === 'days' && scheduleForm.selectedDays.length === 0)
+    || (!scheduleForm.isOneTime && scheduleForm.scheduleMode === 'calendar' && !scheduleForm.calendar_match?.trim())
     || isOnceCompletedMissingInterval
     || hasInvalidDueDays;
 
@@ -700,13 +707,13 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.duration')}>
-                    {s.crontab && s.duration === 'until-completed' ? (
+                    {(s.crontab || s.calendar_match) && s.duration === 'until-completed' ? (
                       <Chip label={t('chores:schedules.untilCompleted')} size="small" color="warning" />
-                    ) : s.crontab && s.duration === 'once-completed' ? (
+                    ) : (s.crontab || s.calendar_match) && s.duration === 'once-completed' ? (
                       <Chip label={s.interval
                           ? t('chores:schedules.onceCompletedWithInterval', { interval: formatScheduleInterval(s.interval) })
                           : t('chores:schedules.onceCompleted')} size="small" color="secondary" />
-                    ) : s.crontab ? (
+                    ) : (s.crontab || s.calendar_match) ? (
                       <Chip label={t('chores:schedules.dayOf')} size="small" variant="outlined" />
                     ) : (
                       <Typography variant="caption" color="text.secondary">—</Typography>
