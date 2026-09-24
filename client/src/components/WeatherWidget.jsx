@@ -681,7 +681,19 @@ const WeatherWidget = ({
             </Typography>
           )}
         </Box>
-        <IconButton size="small" onClick={() => setDetailsModalOpen(false)}>✕</IconButton>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {!hideWeatherSettings && (
+            <IconButton
+              size="small"
+              onClick={handleOpenSettingsModal}
+              aria-label={t('weather:widget.openSettingsAria')}
+              sx={{ color: 'var(--text)' }}
+            >
+              <Settings fontSize="small" />
+            </IconButton>
+          )}
+          <IconButton size="small" onClick={() => setDetailsModalOpen(false)}>✕</IconButton>
+        </Box>
       </DialogTitle>
 
       <DialogContent dividers sx={{ p: 0, overflowY: 'auto' }}>
@@ -979,25 +991,6 @@ const WeatherWidget = ({
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
-      {!hideWeatherSettings && (
-        <IconButton
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleOpenSettingsModal();
-          }}
-          aria-label={t('weather:widget.openSettingsAria')}
-          sx={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            zIndex: 10,
-            color: 'var(--text)',
-          }}
-        >
-          <Settings />
-        </IconButton>
-      )}
       {content}
       {settingsModal}
       {detailsModal}
