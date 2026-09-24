@@ -98,6 +98,10 @@
   },
   "add": {
     "dialogTitle": "Add New Chore",
+    "assignTo": "Assign To",
+    "allUsers": "Everyone",
+    "clearUsers": "Clear",
+    "scheduleType": "Schedule Type",
     "assignToUser": "Assign to User",
     "bonusChoreUnassigned": "Bonus Chore (Unassigned)",
     "oneTime": "One-time chore (no recurrence)",
