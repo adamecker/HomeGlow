@@ -31,7 +31,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 10px 16px;
+      padding: 6px 14px;
       box-sizing: border-box;
     }
     .date-col {
@@ -43,30 +43,32 @@
       min-width: 0;
     }
     .day-name {
-      font-size: clamp(0.85rem, 3.2cqw, 1.25rem);
+      font-size: clamp(0.95rem, 3.4vw, 1.45rem);
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.12em;
       color: var(--text-muted);
       margin-bottom: 2px;
+      line-height: 1.1;
     }
     .full-date {
-      font-size: clamp(2.2rem, 9cqw, 3.8rem);
+      font-size: clamp(2.8rem, 9.5vw, 4.8rem);
       font-weight: 900;
-      letter-spacing: -0.03em;
-      line-height: 1.05;
+      letter-spacing: -0.035em;
+      line-height: 1;
       white-space: nowrap;
       color: var(--text-main);
     }
     .year-val {
-      font-size: clamp(0.75rem, 2.6cqw, 1.1rem);
+      font-size: clamp(0.85rem, 2.8vw, 1.25rem);
       font-weight: 700;
       color: var(--text-muted);
-      margin-top: 4px;
+      margin-top: 3px;
+      line-height: 1.1;
     }
     .divider {
       width: 1px;
-      height: 70%;
+      height: 72%;
       background: var(--border-color);
       margin: 0 10px;
     }
@@ -75,25 +77,26 @@
       flex-direction: column;
       align-items: flex-end;
       justify-content: center;
-      flex: 1.1;
+      flex: 1.15;
       min-width: 0;
     }
     .digits {
-      font-size: clamp(3.2rem, 13cqw, 5.4rem);
+      font-size: clamp(4.2rem, 14vw, 7.2rem);
       font-weight: 900;
       color: #00ddeb;
-      line-height: 1;
+      line-height: 0.95;
       letter-spacing: -0.04em;
       font-variant-numeric: tabular-nums;
     }
     .sub-time {
       display: flex;
       gap: 8px;
-      font-size: clamp(0.75rem, 2.6cqw, 1.05rem);
+      font-size: clamp(0.85rem, 2.8vw, 1.25rem);
       font-weight: 800;
       color: var(--text-muted);
       text-transform: uppercase;
-      margin-top: 4px;
+      margin-top: 3px;
+      line-height: 1.1;
     }
   </style>
 </head>
