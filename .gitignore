@@ -50,3 +50,4 @@ data/
 homeglow/
 server/data/
 client/data/
+.aider*

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Date & Clock</title>
+  <link rel="stylesheet" href="/index.css">
+  <style>
+    :root {
+      --text-main: var(--text, #f0f0f0);
+      --text-muted: var(--text-secondary, #999999);
+      --border-color: var(--card-border, #333333);
+    }
+    body {
+      background: transparent !important;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      color: var(--text-main);
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      user-select: none;
+    }
+    .widget-container {
+      background: var(--card-bg, #1a1a1a);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      box-sizing: border-box;
+    }
+    .date-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      flex: 1.1;
+      min-width: 0;
+    }
+    .day-name {
+      font-size: clamp(0.85rem, 3.2cqw, 1.25rem);
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-muted);
+      margin-bottom: 2px;
+    }
+    .full-date {
+      font-size: clamp(2.2rem, 9cqw, 3.8rem);
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      white-space: nowrap;
+      color: var(--text-main);
+    }
+    .year-val {
+      font-size: clamp(0.75rem, 2.6cqw, 1.1rem);
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .divider {
+      width: 1px;
+      height: 70%;
+      background: var(--border-color);
+      margin: 0 10px;
+    }
+    .time-col {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      justify-content: center;
+      flex: 1.1;
+      min-width: 0;
+    }
+    .digits {
+      font-size: clamp(3.2rem, 13cqw, 5.4rem);
+      font-weight: 900;
+      color: #00ddeb;
+      line-height: 1;
+      letter-spacing: -0.04em;
+      font-variant-numeric: tabular-nums;
+    }
+    .sub-time {
+      display: flex;
+      gap: 8px;
+      font-size: clamp(0.75rem, 2.6cqw, 1.05rem);
+      font-weight: 800;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="widget-container">
+    <div class="date-col">
+      <span class="day-name" id="dayName">--</span>
+      <span class="full-date" id="fullDate">--</span>
+      <span class="year-val" id="yearVal">----</span>
+    </div>
+    <div class="divider"></div>
+    <div class="time-col">
+      <span class="digits" id="timeDigits">--:--</span>
+      <div class="sub-time">
+        <span id="ampmVal">--</span>
+        <span id="secVal">--</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function update() {
+      const now = new Date();
+      document.getElementById('dayName').textContent = now.toLocaleDateString(undefined, { weekday: 'long' });
+      document.getElementById('fullDate').textContent = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      document.getElementById('yearVal').textContent = now.getFullYear();
+
+      let h = now.getHours();
+      const m = String(now.getMinutes()).padStart(2, '0');
+      const s = String(now.getSeconds()).padStart(2, '0');
+      const ampm = h >= 12 ? 'PM' : 'AM';
+      h = h % 12 || 12;
+
+      document.getElementById('timeDigits').textContent = `${h}:${m}`;
+      document.getElementById('ampmVal').textContent = ampm;
+      document.getElementById('secVal').textContent = s;
+    }
+
+    function applyTheme() {
+      const p = new URLSearchParams(window.location.search);
+      document.documentElement.setAttribute('data-theme', p.get('theme') || 'dark');
+      if (p.get('transparent') === 'true') {
+        const c = document.querySelector('.widget-container');
+        if (c) { c.style.background = 'transparent'; c.style.border = 'none'; }
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      applyTheme();
+      update();
+      setInterval(update, 1000);
+    });
+  </script>
+</body>
+</html>

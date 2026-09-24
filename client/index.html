@@ -1,11 +1,34 @@
 <!doctype html>
 <html lang="en">
   <head>
-    <meta charset="UTF-8" />
+<script>
+(function() {
+  function sendErr(type, msg, stack) {
+    try {
+      fetch('/api/client-error', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ type: type, message: msg, stack: stack, url: window.location.href, ua: navigator.userAgent })
+      });
+    } catch(e) {}
+  }
+  window.addEventListener('error', function(e) {
+    sendErr('UNCAUGHT_ERROR', e.message, e.error ? e.error.stack : 'no-stack');
+  });
+  window.addEventListener('unhandledrejection', function(e) {
+    sendErr('UNHANDLED_REJECTION', e.reason ? (e.reason.message || String(e.reason)) : 'unknown', e.reason ? e.reason.stack : 'no-stack');
+  });
+})();
+</script>
+
+<meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/HomeGlowLogo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HomeGlow</title>
-  </head>
+    
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+  <script>eruda.init();</script>
+</head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>

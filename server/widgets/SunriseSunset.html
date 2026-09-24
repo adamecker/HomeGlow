@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sunrise and Sunset</title>
+  <script type="application/json" id="homeglow-manifest">{
+  "manifestVersion": 1,
+  "id": "sunrise-sunset",
+  "name": "Sunrise and Sunset",
+  "description": "Today sunrise and sunset times, golden hours, and daylight duration.",
+  "version": "1.2.0",
+  "apiVersion": "v1",
+  "settings": [
+    {
+      "key": "lat",
+      "label": "Latitude",
+      "type": "number",
+      "default": 47.6401,
+      "scope": "household"
+    },
+    {
+      "key": "lon",
+      "label": "Longitude",
+      "type": "number",
+      "default": -122.3993,
+      "scope": "household"
+    }
+  ]
+}</script>
+  <link rel="stylesheet" href="/index.css">
+  <style>
+    body {
+      background: transparent !important;
+      font-family: 'Inter', sans-serif;
+      margin: 0;
+      padding: 0.5rem;
+      box-sizing: border-box;
+      font-size: 0.85rem;
+      color: var(--text, #333);
+      user-select: none;
+    }
+    .widget-container {
+      background: var(--card-bg, #ffffff) !important;
+      border: 1px solid var(--card-border, #e5e5e5) !important;
+      border-radius: 12px;
+      padding: 0.75rem;
+      text-align: center;
+      width: 100%;
+      height: 100%;
+      box-sizing: border-box;
+      overflow-y: auto;
+    }
+    .widget-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.4rem;
+    }
+    .widget-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .date-display {
+      font-size: 0.75rem;
+      opacity: 0.7;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+    .status-row {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.4rem;
+      font-size: 0.72rem;
+      font-weight: 700;
+      padding: 0.2rem 0.6rem;
+      border-radius: 20px;
+      margin-bottom: 0.5rem;
+    }
+    .status-row.is-day {
+      background: rgba(245, 166, 35, 0.15) !important;
+      color: #f5a623;
+      border: 1px solid rgba(245, 166, 35, 0.3);
+    }
+    .status-row.is-night {
+      background: rgba(100, 100, 150, 0.15) !important;
+      color: #a6a6d1;
+      border: 1px solid rgba(100, 100, 150, 0.3);
+    }
+    .sun-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+    .sun-card {
+      background: rgba(var(--accent-rgb, 128,128,128), 0.05) !important;
+      border: 1px solid var(--card-border, #eee);
+      border-radius: 8px;
+      padding: 0.5rem 0.4rem;
+      text-align: center;
+    }
+    .sun-card.sunrise { border-left: 3px solid #f5a623; }
+    .sun-card.sunset { border-left: 3px solid #e87040; }
+    .sun-card.golden-morning { border-left: 3px solid #ffd700; }
+    .sun-card.golden-evening { border-left: 3px solid #ff8c00; }
+    .sun-icon {
+      font-size: 1.4rem;
+      margin-bottom: 0.15rem;
+      display: block;
+    }
+    .sun-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      opacity: 0.7;
+    }
+    .sun-time {
+      font-size: 1.15rem;
+      font-weight: 800;
+      color: #00ddeb;
+      margin: 0.1rem 0;
+    }
+    .sun-sub {
+      font-size: 0.65rem;
+      opacity: 0.7;
+    }
+    .daylight-bar-section {
+      background: rgba(var(--accent-rgb, 128,128,128), 0.05) !important;
+      border: 1px solid var(--card-border, #eee);
+      border-radius: 8px;
+      padding: 0.5rem 0.6rem;
+    }
+    .daylight-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .daylight-hours {
+      color: #00ddeb;
+      font-weight: 700;
+    }
+    .daylight-bar-track {
+      height: 8px;
+      background: rgba(128, 128, 128, 0.2) !important;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+    .daylight-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #f5a623, #ffd700, #e87040) !important;
+      border-radius: 4px;
+      transition: width 1s ease;
+    }
+  </style>
+  <script src="/plugin-sdk/v1.js"></script>
+</head>
+<body>
+  <div class="widget-container">
+    <div class="widget-header">
+      <div class="widget-title">🌅 Sunrise & Sunset</div>
+      <div class="status-row is-day" id="statusBadge">☀️ Daytime</div>
+    </div>
+    <div class="date-display" id="dateDisplay">--</div>
+
+    <div class="sun-grid">
+      <div class="sun-card sunrise">
+        <span class="sun-icon">🌅</span>
+        <div class="sun-label">Sunrise</div>
+        <div class="sun-time" id="sunriseTime">--:--</div>
+        <div class="sun-sub" id="dawnTime">Dawn: --:--</div>
+      </div>
+      <div class="sun-card sunset">
+        <span class="sun-icon">🌇</span>
+        <div class="sun-label">Sunset</div>
+        <div class="sun-time" id="sunsetTime">--:--</div>
+        <div class="sun-sub" id="duskTime">Dusk: --:--</div>
+      </div>
+      <div class="sun-card golden-morning">
+        <span class="sun-icon">☀️</span>
+        <div class="sun-label">Golden Hour AM</div>
+        <div class="sun-time" id="goldenMorning">--:--</div>
+      </div>
+      <div class="sun-card golden-evening">
+        <span class="sun-icon">🌆</span>
+        <div class="sun-label">Golden Hour PM</div>
+        <div class="sun-time" id="goldenEvening">--:--</div>
+      </div>
+    </div>
+
+    <div class="daylight-bar-section">
+      <div class="daylight-label">
+        <span>Daylight</span>
+        <span class="daylight-hours" id="daylightHours">-- hrs</span>
+      </div>
+      <div class="daylight-bar-track">
+        <div class="daylight-bar-fill" id="daylightFill" style="width: 50%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function applyTheme() {
+      const p = new URLSearchParams(window.location.search);
+      const theme = p.get('theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', theme);
+    }
+
+    async function updateSunData() {
+      try {
+        let lat = 47.6401;
+        let lon = -122.3993;
+        if (window.HomeGlow && window.HomeGlow.settings) {
+          try {
+            const cfg = await window.HomeGlow.settings.get();
+            if (cfg.lat) lat = cfg.lat;
+            if (cfg.lon) lon = cfg.lon;
+          } catch (_) {}
+        }
+
+        const res = await fetch(`/api/sun?lat=${lat}&lon=${lon}`);
+        const data = await res.json();
+        const now = new Date();
+        document.getElementById('dateDisplay').textContent = now.toLocaleDateString(undefined, {
+          weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
+        });
+
+        if (data.sunrise && data.sunset) {
+          const sr = new Date(data.sunrise * 1000);
+          const ss = new Date(data.sunset * 1000);
+
+          const fmt = (d) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+          document.getElementById('sunriseTime').textContent = fmt(sr);
+          document.getElementById('sunsetTime').textContent = fmt(ss);
+
+          const dawn = new Date(sr.getTime() - 30 * 60000);
+          const dusk = new Date(ss.getTime() + 30 * 60000);
+          document.getElementById('dawnTime').textContent = 'Dawn: ' + fmt(dawn);
+          document.getElementById('duskTime').textContent = 'Dusk: ' + fmt(dusk);
+
+          const goldenAM = new Date(sr.getTime() + 45 * 60000);
+          const goldenPM = new Date(ss.getTime() - 45 * 60000);
+          document.getElementById('goldenMorning').textContent = fmt(goldenAM);
+          document.getElementById('goldenEvening').textContent = fmt(goldenPM);
+
+          const diffMs = ss - sr;
+          const hrs = Math.floor(diffMs / 3600000);
+          const mins = Math.round((diffMs % 3600000) / 60000);
+          document.getElementById('daylightHours').textContent = `${hrs}h ${mins}m`;
+
+          const nowMs = now.getTime();
+          const badge = document.getElementById('statusBadge');
+          if (nowMs >= sr.getTime() && nowMs < ss.getTime()) {
+            badge.className = 'status-row is-day';
+            badge.textContent = '☀️ Daytime';
+            const progress = Math.min(100, Math.max(0, ((nowMs - sr.getTime()) / diffMs) * 100));
+            document.getElementById('daylightFill').style.width = progress + '%';
+          } else {
+            badge.className = 'status-row is-night';
+            badge.textContent = '🌙 Nighttime';
+            document.getElementById('daylightFill').style.width = '0%';
+          }
+        }
+      } catch (err) {
+        console.error('Sun calculation error', err);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      applyTheme();
+      updateSunData();
+    });
+  </script>
+</body>
+</html>
