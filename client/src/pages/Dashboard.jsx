@@ -86,6 +86,40 @@ const Dashboard = () => {
     });
 
     setWidgetSizes(newSizes);
+
+    setTabs(prevTabs => {
+      const baseTabs = (!prevTabs || prevTabs.length === 0)
+        ? [{ number: activeTab, config_json: '{}' }]
+        : prevTabs;
+      return baseTabs.map(tab => {
+        if (tab.number !== activeTab) return tab;
+        let currentConfig = {};
+        try {
+          currentConfig = typeof tab.config_json === 'string'
+            ? JSON.parse(tab.config_json || '{}')
+            : (tab.config_json || {});
+        } catch {
+          currentConfig = {};
+        }
+        const updatedConfig = { ...currentConfig };
+        layout.forEach(item => {
+          const widgetName = getWidgetName(item.i);
+          if (widgetName) {
+            updatedConfig[widgetName] = {
+              ...(updatedConfig[widgetName] || {}),
+              layout_x: item.x,
+              layout_y: item.y,
+              layout_w: item.w,
+              layout_h: item.h,
+            };
+          }
+        });
+        return {
+          ...tab,
+          config_json: JSON.stringify(updatedConfig),
+        };
+      });
+    });
   };
 
   // Handle lock toggle - refresh weather widget when locking

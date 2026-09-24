@@ -1,6 +1,6 @@
 export const getApiUrl = () => {
   if (import.meta.env.MODE === 'development') {
-    return import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:5001';
+    return import.meta.env.VITE_REACT_APP_API_URL || 'http://localhost:5000';
   }
   return import.meta.env.VITE_REACT_APP_API_URL || '';
 };

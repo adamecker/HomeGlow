@@ -97,7 +97,9 @@ const WidgetContainer = ({
         });
 
       if (layouts.length > 0) {
-        axios.patch(`${API_DEVICE_URL}/widget-assignments/layout/bulk`, { layouts }).catch(() => { });
+        axios.patch(`${API_DEVICE_URL}/widget-assignments/layout/bulk`, { layouts }).catch((err) => {
+          console.error('Failed to save widget layout:', err?.response?.data || err?.message || err);
+        });
       }
     };
 
@@ -155,7 +157,7 @@ const WidgetContainer = ({
     prevWidgetIdsRef.current = widgetIdsKey;
     prevSavedLayoutKeyRef.current = savedLayoutKey;
 
-    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival;
+    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival || (savedLayoutChanged && lockedRef.current);
 
     if (shouldRebuildLayout) {
       if (hasAnySavedLayout) {
@@ -163,6 +165,7 @@ const WidgetContainer = ({
       }
       const initialLayout = buildLayout(widgets, gridCols, lockedRef.current);
       setLayout(initialLayout);
+      layoutRef.current = initialLayout;
       layoutTabRef.current = activeTab;
     } else if (colsChanged) {
       setLayout((currentLayout) => {
@@ -184,20 +187,19 @@ const WidgetContainer = ({
 
     setIsLockTransitioning(true);
 
-    setLayout((currentLayout) => {
-      const updatedLayout = currentLayout.map(item => ({
-        ...item,
-        static: locked
-      }));
-      return updatedLayout;
-    });
+    const updatedLayout = layoutRef.current.map(item => ({
+      ...item,
+      static: locked
+    }));
+    setLayout(updatedLayout);
+    layoutRef.current = updatedLayout;
 
     const shouldPersistLockedLayouts = hasInitializedLockEffectRef.current
       && !wasLocked
       && locked
       && layoutTabRef.current === activeTab;
-    if (shouldPersistLockedLayouts && layoutRef.current.length > 0) {
-      saveLayoutsToApi(layoutRef.current, activeTab, gridCols, true);
+    if (shouldPersistLockedLayouts && updatedLayout.length > 0) {
+      saveLayoutsToApi(updatedLayout, activeTab, gridCols, true);
     }
 
     if (!hasInitializedLockEffectRef.current) {
