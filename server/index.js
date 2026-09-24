@@ -4009,13 +4009,9 @@ fastify.get('/api/devices/:deviceName/tabs', async (request, reply) => {
   }
 
   try {
+    ensureDeviceExists(deviceName);
     const tabs = db.prepare('SELECT * FROM tabs WHERE device_name = ? ORDER BY number ASC').all(deviceName);
     const lastModifiedMs = getDeviceUpdateTimeMs(deviceName);
-    // region #98 - expected to get removed in the future (legacy empty-tabs API fallback)
-    if (tabs.length === 0) {
-      return sendJsonWithConditionalCache(request, reply, [buildDefaultHomeTab(deviceName)], null);
-    }
-    // endRegion #98
     return sendJsonWithConditionalCache(request, reply, tabs, lastModifiedMs);
   } catch (error) {
     console.error('Error fetching tabs:', error);

@@ -131,6 +131,7 @@ const WidgetContainer = ({
   }, []);
 
   const prevSavedLayoutKeyRef = useRef('');
+  const hasLoadedSavedLayoutsRef = useRef(false);
 
   useEffect(() => {
     lockedRef.current = locked;
@@ -140,16 +141,20 @@ const WidgetContainer = ({
     const widgetIdsKey = `${activeTab}:${widgets.map(w => w.id).sort().join(',')}`;
     const savedLayoutKey = widgets.map(w => `${w.id}:${w.savedLayout ? `${w.savedLayout.x},${w.savedLayout.y},${w.savedLayout.w},${w.savedLayout.h}` : 'none'}`).sort().join(';');
     const widgetIdsChanged = widgetIdsKey !== prevWidgetIdsRef.current;
-    const savedLayoutChanged = savedLayoutKey !== prevSavedLayoutKeyRef.current;
+    const hasAnySavedLayout = widgets.some(w => Boolean(w.savedLayout));
+    const firstSavedLayoutArrival = hasAnySavedLayout && !hasLoadedSavedLayoutsRef.current;
     const prevCols = prevGridColsRef.current;
     const colsChanged = prevCols != null && prevCols !== gridCols;
 
     prevWidgetIdsRef.current = widgetIdsKey;
     prevSavedLayoutKeyRef.current = savedLayoutKey;
 
-    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || (savedLayoutChanged && lockedRef.current);
+    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival;
 
     if (shouldRebuildLayout) {
+      if (hasAnySavedLayout) {
+        hasLoadedSavedLayoutsRef.current = true;
+      }
       const initialLayout = buildLayout(widgets, gridCols, lockedRef.current);
       setLayout(initialLayout);
       layoutTabRef.current = activeTab;
@@ -488,7 +493,6 @@ const WidgetContainer = ({
   const gridLayout = useMemo(() => {
     const built = buildLayout(widgets, gridCols, locked);
     if (layoutTabRef.current !== activeTab) return built;
-    if (locked) return built;
     return built.map((item) => layout.find((l) => l.i === item.i) || item);
   }, [widgets, layout, gridCols, locked, activeTab]);
 

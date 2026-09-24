@@ -88,8 +88,10 @@ const Dashboard = () => {
     setWidgetSizes(newSizes);
 
     setTabs(prevTabs => {
-      if (!prevTabs || prevTabs.length === 0) return prevTabs;
-      return prevTabs.map(tab => {
+      const baseTabs = (!prevTabs || prevTabs.length === 0)
+        ? [{ number: activeTab, config_json: '{}' }]
+        : prevTabs;
+      return baseTabs.map(tab => {
         if (tab.number !== activeTab) return tab;
         let currentConfig = {};
         try {
