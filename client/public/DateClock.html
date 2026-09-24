@@ -28,10 +28,11 @@
       border-radius: 12px;
       width: 100%;
       height: 100%;
+      margin: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 6px 14px;
+      padding: 8px 18px;
       box-sizing: border-box;
     }
     .date-col {
@@ -40,30 +41,31 @@
       justify-content: center;
       align-items: flex-start;
       flex: 1.1;
+      height: 100%;
       min-width: 0;
     }
     .day-name {
-      font-size: clamp(0.95rem, 3.4vw, 1.45rem);
+      font-size: 1.15rem;
       font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.15em;
       color: var(--text-muted);
-      margin-bottom: 2px;
+      margin-bottom: 4px;
       line-height: 1.1;
     }
     .full-date {
-      font-size: clamp(2.8rem, 9.5vw, 4.8rem);
+      font-size: clamp(3.2rem, 18cqw, 4.4rem);
       font-weight: 900;
       letter-spacing: -0.035em;
-      line-height: 1;
+      line-height: 0.95;
       white-space: nowrap;
       color: var(--text-main);
     }
     .year-val {
-      font-size: clamp(0.85rem, 2.8vw, 1.25rem);
+      font-size: 1rem;
       font-weight: 700;
       color: var(--text-muted);
-      margin-top: 3px;
+      margin-top: 4px;
       line-height: 1.1;
     }
     .divider {
@@ -78,24 +80,25 @@
       align-items: flex-end;
       justify-content: center;
       flex: 1.15;
+      height: 100%;
       min-width: 0;
     }
     .digits {
-      font-size: clamp(4.2rem, 14vw, 7.2rem);
+      font-size: clamp(4.8rem, 28cqw, 6.8rem);
       font-weight: 900;
       color: #00ddeb;
-      line-height: 0.95;
+      line-height: 0.9;
       letter-spacing: -0.04em;
       font-variant-numeric: tabular-nums;
     }
     .sub-time {
       display: flex;
       gap: 8px;
-      font-size: clamp(0.85rem, 2.8vw, 1.25rem);
+      font-size: 1.1rem;
       font-weight: 800;
       color: var(--text-muted);
       text-transform: uppercase;
-      margin-top: 3px;
+      margin-top: 4px;
       line-height: 1.1;
     }
   </style>
