@@ -8,98 +8,104 @@
     :root {
       --text-main: var(--text, #f0f0f0);
       --text-muted: var(--text-secondary, #999999);
-      --border-color: var(--card-border, #333333);
+      --border-color: var(--border, rgba(128,128,128,0.25));
     }
-    body {
-      background: transparent !important;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    * {
+      box-sizing: border-box;
       margin: 0;
       padding: 0;
-      box-sizing: border-box;
-      color: var(--text-main);
-      width: 100vw;
-      height: 100vh;
-      overflow: hidden;
-      user-select: none;
     }
-    .widget-container {
-      background: var(--card-bg, #1a1a1a);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
+    html, body {
       width: 100%;
       height: 100%;
-      margin: 0;
+      overflow: hidden;
+      background: transparent !important;
+    }
+    .widget-container {
+      position: absolute;
+      top: 50%;
+      left: 0;
+      right: 0;
+      transform: translateY(-50%);
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      padding: 8px 18px;
-      box-sizing: border-box;
+      justify-content: space-around;
+      padding: 0 16px;
     }
     .date-col {
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      align-items: flex-start;
+      align-items: center;
+      text-align: center;
+      gap: 5px;
       flex: 1.1;
-      height: 100%;
-      min-width: 0;
     }
     .day-name {
-      font-size: 1.15rem;
+      font-size: 0.95rem;
       font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.14em;
       color: var(--text-muted);
-      margin-bottom: 4px;
       line-height: 1.1;
     }
     .full-date {
-      font-size: clamp(3.2rem, 18cqw, 4.4rem);
+      font-size: 2.35rem;
       font-weight: 900;
-      letter-spacing: -0.035em;
-      line-height: 0.95;
+      letter-spacing: -0.025em;
+      line-height: 1.05;
       white-space: nowrap;
       color: var(--text-main);
     }
     .year-val {
-      font-size: 1rem;
+      font-size: 0.9rem;
       font-weight: 700;
       color: var(--text-muted);
-      margin-top: 4px;
+      opacity: 0.65;
       line-height: 1.1;
     }
     .divider {
       width: 1px;
-      height: 72%;
+      height: 72px;
       background: var(--border-color);
+      opacity: 0.35;
       margin: 0 10px;
     }
     .time-col {
       display: flex;
       flex-direction: column;
-      align-items: flex-end;
+      align-items: center;
+      text-align: center;
+      gap: 3px;
+      flex: 1.1;
+    }
+    .time-row {
+      display: flex;
+      align-items: baseline;
       justify-content: center;
-      flex: 1.15;
-      height: 100%;
-      min-width: 0;
+      gap: 6px;
     }
     .digits {
-      font-size: clamp(4.8rem, 28cqw, 6.8rem);
+      font-size: 3.85rem;
       font-weight: 900;
       color: #00ddeb;
-      line-height: 0.9;
-      letter-spacing: -0.04em;
+      line-height: 0.95;
+      letter-spacing: -0.035em;
       font-variant-numeric: tabular-nums;
     }
-    .sub-time {
-      display: flex;
-      gap: 8px;
-      font-size: 1.1rem;
+    .ampm-badge {
+      font-size: 1.35rem;
       font-weight: 800;
-      color: var(--text-muted);
+      color: #00ddeb;
+      letter-spacing: 0.05em;
       text-transform: uppercase;
-      margin-top: 4px;
-      line-height: 1.1;
+    }
+    .seconds-val {
+      font-size: 0.85rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      opacity: 0.65;
+      letter-spacing: 0.08em;
+      font-variant-numeric: tabular-nums;
     }
   </style>
 </head>
@@ -112,11 +118,11 @@
     </div>
     <div class="divider"></div>
     <div class="time-col">
-      <span class="digits" id="timeDigits">--:--</span>
-      <div class="sub-time">
-        <span id="ampmVal">--</span>
-        <span id="secVal">--</span>
+      <div class="time-row">
+        <span class="digits" id="timeDigits">--:--</span>
+        <span class="ampm-badge" id="ampmVal">--</span>
       </div>
+      <span class="seconds-val" id="secVal">--</span>
     </div>
   </div>
 
@@ -124,7 +130,7 @@
     function update() {
       const now = new Date();
       document.getElementById('dayName').textContent = now.toLocaleDateString(undefined, { weekday: 'long' });
-      document.getElementById('fullDate').textContent = now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+      document.getElementById('fullDate').textContent = now.toLocaleDateString(undefined, { month: 'long', day: 'numeric' });
       document.getElementById('yearVal').textContent = now.getFullYear();
 
       let h = now.getHours();
@@ -135,7 +141,7 @@
 
       document.getElementById('timeDigits').textContent = `${h}:${m}`;
       document.getElementById('ampmVal').textContent = ampm;
-      document.getElementById('secVal').textContent = s;
+      document.getElementById('secVal').textContent = `:${s}`;
     }
 
     function applyTheme() {
