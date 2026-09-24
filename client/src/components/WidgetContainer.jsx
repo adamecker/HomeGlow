@@ -155,7 +155,7 @@ const WidgetContainer = ({
     prevWidgetIdsRef.current = widgetIdsKey;
     prevSavedLayoutKeyRef.current = savedLayoutKey;
 
-    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival || (savedLayoutChanged && lockedRef.current);
+    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival;
 
     if (shouldRebuildLayout) {
       if (hasAnySavedLayout) {
@@ -494,13 +494,6 @@ const WidgetContainer = ({
   const gridLayout = useMemo(() => {
     const built = buildLayout(widgets, gridCols, locked);
     if (layoutTabRef.current !== activeTab) return built;
-    if (locked) {
-      return built.map((item) => {
-        const widget = widgets.find((w) => w.id === item.i);
-        if (widget?.savedLayout) return item;
-        return layout.find((l) => l.i === item.i) || item;
-      });
-    }
     return built.map((item) => layout.find((l) => l.i === item.i) || item);
   }, [widgets, layout, gridCols, locked, activeTab]);
 
