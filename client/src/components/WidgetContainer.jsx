@@ -71,7 +71,12 @@ const WidgetContainer = ({
   // rebuild lands. Guards against saving a layout mid tab change — see
   // shouldAcceptLayoutChange.
   const layoutTabRef = useRef(null);
+  const layoutRef = useRef(layout);
   const resizeTapGuardRef = useRef(new Map());
+
+  useEffect(() => {
+    layoutRef.current = layout;
+  }, [layout]);
 
   const saveLayoutsToApi = useCallback((layoutItems, tabNumber, cols, immediate = false) => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -141,6 +146,7 @@ const WidgetContainer = ({
     const widgetIdsKey = `${activeTab}:${widgets.map(w => w.id).sort().join(',')}`;
     const savedLayoutKey = widgets.map(w => `${w.id}:${w.savedLayout ? `${w.savedLayout.x},${w.savedLayout.y},${w.savedLayout.w},${w.savedLayout.h}` : 'none'}`).sort().join(';');
     const widgetIdsChanged = widgetIdsKey !== prevWidgetIdsRef.current;
+    const savedLayoutChanged = savedLayoutKey !== prevSavedLayoutKeyRef.current;
     const hasAnySavedLayout = widgets.some(w => Boolean(w.savedLayout));
     const firstSavedLayoutArrival = hasAnySavedLayout && !hasLoadedSavedLayoutsRef.current;
     const prevCols = prevGridColsRef.current;
@@ -149,7 +155,7 @@ const WidgetContainer = ({
     prevWidgetIdsRef.current = widgetIdsKey;
     prevSavedLayoutKeyRef.current = savedLayoutKey;
 
-    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival;
+    const shouldRebuildLayout = widgetIdsChanged || layout.length === 0 || firstSavedLayoutArrival || (savedLayoutChanged && lockedRef.current);
 
     if (shouldRebuildLayout) {
       if (hasAnySavedLayout) {
@@ -183,21 +189,16 @@ const WidgetContainer = ({
         ...item,
         static: locked
       }));
-
-      // Same invariant as handleLayoutChange: only persist when the layout state
-      // and the active tab agree. Locking mid tab change would otherwise write
-      // the previous tab's arrangement under the new tab's number by this path
-      // instead.
-      const shouldPersistLockedLayouts = hasInitializedLockEffectRef.current
-        && !wasLocked
-        && locked
-        && layoutTabRef.current === activeTab;
-      if (shouldPersistLockedLayouts) {
-        saveLayoutsToApi(updatedLayout, activeTab, gridCols, true);
-      }
-
       return updatedLayout;
     });
+
+    const shouldPersistLockedLayouts = hasInitializedLockEffectRef.current
+      && !wasLocked
+      && locked
+      && layoutTabRef.current === activeTab;
+    if (shouldPersistLockedLayouts && layoutRef.current.length > 0) {
+      saveLayoutsToApi(layoutRef.current, activeTab, gridCols, true);
+    }
 
     if (!hasInitializedLockEffectRef.current) {
       hasInitializedLockEffectRef.current = true;
@@ -208,7 +209,7 @@ const WidgetContainer = ({
     }, 50);
 
     return () => clearTimeout(timer);
-  }, [locked, saveLayoutsToApi, activeTab]);
+  }, [locked, saveLayoutsToApi, activeTab, gridCols]);
 
   // Deselect widget when locked
   useEffect(() => {
@@ -493,6 +494,13 @@ const WidgetContainer = ({
   const gridLayout = useMemo(() => {
     const built = buildLayout(widgets, gridCols, locked);
     if (layoutTabRef.current !== activeTab) return built;
+    if (locked) {
+      return built.map((item) => {
+        const widget = widgets.find((w) => w.id === item.i);
+        if (widget?.savedLayout) return item;
+        return layout.find((l) => l.i === item.i) || item;
+      });
+    }
     return built.map((item) => layout.find((l) => l.i === item.i) || item);
   }, [widgets, layout, gridCols, locked, activeTab]);
 

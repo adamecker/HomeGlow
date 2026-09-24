@@ -4011,8 +4011,8 @@ fastify.get('/api/devices/:deviceName/tabs', async (request, reply) => {
   try {
     ensureDeviceExists(deviceName);
     const tabs = db.prepare('SELECT * FROM tabs WHERE device_name = ? ORDER BY number ASC').all(deviceName);
-    const lastModifiedMs = getDeviceUpdateTimeMs(deviceName);
-    return sendJsonWithConditionalCache(request, reply, tabs, lastModifiedMs);
+    reply.header('Cache-Control', 'no-store, no-cache, must-revalidate');
+    return tabs;
   } catch (error) {
     console.error('Error fetching tabs:', error);
     reply.status(500).send({ error: 'Failed to fetch tabs' });
