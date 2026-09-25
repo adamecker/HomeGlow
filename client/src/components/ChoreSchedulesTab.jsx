@@ -315,7 +315,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
       const payload = {
         chore_id: scheduleForm.chore_id,
         ...(isMultiCreate ? { user_ids: scheduleForm.user_ids } : { user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id }),
-        crontab: isCalendarMode ? null : (cron || null),
+        crontab: (scheduleForm.duration === 'once-completed' || scheduleForm.isOneTime || isCalendarMode) ? null : (cron || null),
         duration: durationValue,
         interval: normalizedInterval,
         visible: scheduleForm.visible ? 1 : 0,
