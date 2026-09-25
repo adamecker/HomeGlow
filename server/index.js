@@ -2337,8 +2337,50 @@ function buildDefaultHomeTab(deviceName) {
 }
 
 function ensureDeviceExists(deviceName) {
-  db.prepare('INSERT OR IGNORE INTO devices (name, updateTime) VALUES (?, CURRENT_TIMESTAMP)').run(deviceName);
-  ensureHomeTabExists(deviceName);
+  const existing = db.prepare('SELECT name FROM devices WHERE name = ?').get(deviceName);
+  if (existing) {
+    ensureHomeTabExists(deviceName);
+    return;
+  }
+
+  // Device is brand-new. Insert it.
+  db.prepare('INSERT INTO devices (name, updateTime) VALUES (?, CURRENT_TIMESTAMP)').run(deviceName);
+
+  // Check if an existing configured device exists to seed tabs and settings from
+  const templateDevice = db.prepare(`
+    SELECT name, device_settings_json
+    FROM devices
+    WHERE name != ? AND EXISTS (SELECT 1 FROM tabs WHERE device_name = devices.name)
+    ORDER BY updateTime DESC
+    LIMIT 1
+  `).get(deviceName);
+
+  if (templateDevice) {
+    try {
+      db.transaction(() => {
+        db.prepare(`
+          INSERT INTO tabs (device_name, label, icon, show_label, number, created_at, config_json)
+          SELECT ?, label, icon, show_label, number, created_at, COALESCE(config_json, '{}')
+          FROM tabs
+          WHERE device_name = ?
+          ORDER BY number ASC
+        `).run(deviceName, templateDevice.name);
+
+        if (templateDevice.device_settings_json) {
+          db.prepare('UPDATE devices SET device_settings_json = ? WHERE name = ?').run(
+            templateDevice.device_settings_json,
+            deviceName
+          );
+        }
+      })();
+      console.log(`Auto-seeded new device ${deviceName} from existing device ${templateDevice.name}`);
+    } catch (err) {
+      console.error(`Failed to auto-seed new device ${deviceName}:`, err);
+      ensureHomeTabExists(deviceName);
+    }
+  } else {
+    ensureHomeTabExists(deviceName);
+  }
 }
 
 function touchDeviceUpdateTime(deviceName) {
