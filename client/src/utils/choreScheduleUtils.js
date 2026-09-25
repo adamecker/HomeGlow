@@ -23,7 +23,10 @@ export const DEFAULT_SCHEDULE_FIELDS = {
 
 export const getDayOptions = () => getWeekdayLabels(0).map((label, value) => ({ label, value }));
 
-export function getNextOccurrence(crontab) {
+export function getNextOccurrence(crontab, schedule) {
+  if (schedule?.duration === 'once-completed') {
+    return schedule.interval ? `Once completed (+${formatScheduleInterval(schedule.interval)})` : 'Once completed';
+  }
   if (!crontab) return 'One-time';
   try {
     const tz = getServerTimezoneSync();

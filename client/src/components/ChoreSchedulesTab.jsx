@@ -632,7 +632,7 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                     <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
                       {s.calendar_match ? (
                       <Chip label={`📅 On: "${s.calendar_match}"`} size="small" color={s.calendar_matched_today ? "success" : "default"} variant="outlined" />
-                    ) : getNextOccurrence(s.crontab)}
+                    ) : getNextOccurrence(s.crontab, s)}
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.duration')}>
