@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 const googleConnection = require('./googleConnection');
 
 const DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3';
@@ -7,12 +8,22 @@ const UPLOAD_API_BASE = 'https://www.googleapis.com/upload/drive/v3';
 
 let backupIntervalTimer = null;
 
+function resolveUploadsDir(dbPath) {
+  if (fs.existsSync('/app/uploads')) {
+    return '/app/uploads';
+  }
+  const serverUploads = path.resolve(path.dirname(dbPath), '..', 'uploads');
+  if (fs.existsSync(serverUploads)) {
+    return serverUploads;
+  }
+  return null;
+}
+
 async function uploadBackupToDrive(db, accountId, dbPath) {
   if (!fs.existsSync(dbPath)) {
     throw new Error('Database file not found for backup.');
   }
 
-  // Force SQLite to flush all WAL changes into the main tasks.db file
   try {
     db.pragma('wal_checkpoint(TRUNCATE)');
     console.log('[DriveBackup] Successfully checkpointed WAL into main database.');
@@ -22,50 +33,74 @@ async function uploadBackupToDrive(db, accountId, dbPath) {
 
   const accessToken = await googleConnection.getValidAccessToken(db, accountId);
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `homeglow-backup-${timestamp}.db`;
+  const filename = `homeglow-backup-${timestamp}.tar.gz`;
+  const tmpStaging = path.join('/tmp', `backup-staging-${timestamp}`);
+  const archivePath = path.join('/tmp', filename);
 
-  const metadata = {
-    name: filename,
-    mimeType: 'application/x-sqlite3',
-  };
-
-  const fileBuffer = fs.readFileSync(dbPath);
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-  form.append('file', new Blob([fileBuffer], { type: 'application/x-sqlite3' }));
-
-  const res = await fetch(`${UPLOAD_API_BASE}/files?uploadType=multipart`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: form,
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Google Drive backup upload failed (${res.status}): ${errText}`);
-  }
-
-  const result = await res.json();
-
-  // Prune older backups, keeping the most recent 14 snapshots
   try {
-    const files = await listDriveBackups(db, accountId);
-    if (files.length > 14) {
-      const toDelete = files.slice(14);
-      for (const f of toDelete) {
-        await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(f.id)}`, {
-          method: 'DELETE',
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-      }
-    }
-  } catch (pruneErr) {
-    console.warn('[DriveBackup] Prune warning:', pruneErr.message);
-  }
+    fs.mkdirSync(tmpStaging, { recursive: true });
 
-  return result;
+    fs.copyFileSync(dbPath, path.join(tmpStaging, 'tasks.db'));
+
+    const keyPath = path.join(path.dirname(dbPath), '.encryption-key');
+    if (fs.existsSync(keyPath)) {
+      fs.copyFileSync(keyPath, path.join(tmpStaging, '.encryption-key'));
+    }
+
+    const uploadsDir = resolveUploadsDir(dbPath);
+    if (uploadsDir && fs.existsSync(uploadsDir)) {
+      execSync(`cp -r "${uploadsDir}" "${path.join(tmpStaging, 'uploads')}"`);
+    }
+
+    execSync(`tar -czf "${archivePath}" -C "${tmpStaging}" .`);
+
+    const fileBuffer = fs.readFileSync(archivePath);
+    const metadata = {
+      name: filename,
+      mimeType: 'application/gzip',
+    };
+
+    const form = new FormData();
+    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+    form.append('file', new Blob([fileBuffer], { type: 'application/gzip' }));
+
+    const res = await fetch(`${UPLOAD_API_BASE}/files?uploadType=multipart`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: form,
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Google Drive backup upload failed (${res.status}): ${errText}`);
+    }
+
+    const result = await res.json();
+
+    try {
+      const files = await listDriveBackups(db, accountId);
+      if (files.length > 14) {
+        const toDelete = files.slice(14);
+        for (const f of toDelete) {
+          await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(f.id)}`, {
+            method: 'DELETE',
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+        }
+      }
+    } catch (pruneErr) {
+      console.warn('[DriveBackup] Prune warning:', pruneErr.message);
+    }
+
+    return result;
+  } finally {
+    try {
+      if (fs.existsSync(tmpStaging)) fs.rmSync(tmpStaging, { recursive: true, force: true });
+      if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+    } catch (_) {}
+  }
 }
 
 async function listDriveBackups(db, accountId) {
@@ -96,13 +131,52 @@ async function restoreBackupFromDrive(db, accountId, fileId, targetDbPath) {
   }
 
   const buffer = Buffer.from(await res.arrayBuffer());
+  const isTarGz = buffer.length > 2 && buffer[0] === 0x1f && buffer[1] === 0x8b;
+
+  const dataDir = path.dirname(targetDbPath);
+  const uploadsDir = resolveUploadsDir(targetDbPath);
 
   if (fs.existsSync(targetDbPath)) {
     fs.copyFileSync(targetDbPath, `${targetDbPath}.bak`);
   }
 
-  fs.writeFileSync(targetDbPath, buffer);
-  return { success: true };
+  if (isTarGz) {
+    const tmpRestore = path.join('/tmp', `restore-staging-${Date.now()}`);
+    const tmpArchive = path.join('/tmp', `restore-${Date.now()}.tar.gz`);
+    try {
+      fs.mkdirSync(tmpRestore, { recursive: true });
+      fs.writeFileSync(tmpArchive, buffer);
+      execSync(`tar -xzf "${tmpArchive}" -C "${tmpRestore}"`);
+
+      const extractedDb = path.join(tmpRestore, 'tasks.db');
+      if (fs.existsSync(extractedDb)) {
+        fs.copyFileSync(extractedDb, targetDbPath);
+      }
+
+      const extractedKey = path.join(tmpRestore, '.encryption-key');
+      if (fs.existsSync(extractedKey)) {
+        fs.copyFileSync(extractedKey, path.join(dataDir, '.encryption-key'));
+      }
+
+      const extractedUploads = path.join(tmpRestore, 'uploads');
+      if (uploadsDir && fs.existsSync(extractedUploads)) {
+        if (fs.existsSync(uploadsDir)) {
+          execSync(`cp -r "${uploadsDir}" "${uploadsDir}.bak"`);
+        }
+        execSync(`cp -r "${extractedUploads}/"* "${uploadsDir}/"`);
+      }
+
+      return { success: true };
+    } finally {
+      try {
+        if (fs.existsSync(tmpRestore)) fs.rmSync(tmpRestore, { recursive: true, force: true });
+        if (fs.existsSync(tmpArchive)) fs.unlinkSync(tmpArchive);
+      } catch (_) {}
+    }
+  } else {
+    fs.writeFileSync(targetDbPath, buffer);
+    return { success: true };
+  }
 }
 
 function initAutomatedBackupScheduler(db, dbPath) {
@@ -113,17 +187,15 @@ function initAutomatedBackupScheduler(db, dbPath) {
   backupIntervalTimer = setInterval(async () => {
     try {
       const enabledRow = db.prepare("SELECT value FROM settings WHERE key = 'DRIVE_BACKUP_AUTO_ENABLED'").get();
-      // Default to enabled if not explicitly disabled
       const isEnabled = enabledRow ? enabledRow.value === 'true' : true;
       if (!isEnabled) return;
 
       const timeRow = db.prepare("SELECT value FROM settings WHERE key = 'DRIVE_BACKUP_TIME'").get();
-      const targetTime = timeRow?.value || '02:00'; // Default 2:00 AM local time
+      const targetTime = timeRow?.value || '02:00';
       const [targetH, targetM] = targetTime.split(':').map(Number);
 
       const tz = process.env.TZ || 'America/Los_Angeles';
       const now = new Date();
-      // Resolve time formatted in local timezone
       const formatter = new Intl.DateTimeFormat('en-US', {
         timeZone: tz,
         hour: 'numeric',
@@ -142,7 +214,7 @@ function initAutomatedBackupScheduler(db, dbPath) {
       if (currentH === targetH && currentM === targetM && lastRunDate !== todayStr) {
         const account = googleConnection.getConnectedAccount(db);
         if (account) {
-          console.log(`[DriveBackup] Starting scheduled backup for ${todayStr} at ${targetTime} (${tz})...`);
+          console.log(`[DriveBackup] Starting scheduled full backup for ${todayStr} at ${targetTime} (${tz})...`);
           await uploadBackupToDrive(db, account.id, dbPath);
           lastRunDate = todayStr;
           console.log('[DriveBackup] Scheduled backup finished successfully.');
