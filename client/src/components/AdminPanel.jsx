@@ -405,10 +405,12 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     try {
       const res = await axios.post(`${API_BASE_URL}/api/users/${userId}/google-tasks/sync`);
       await fetchChores();
+      const imported = res.data.imported || 0;
+      const updated = res.data.updated || 0;
       setSaveMessage({
         show: true,
         type: 'success',
-        text: `Synced tasks: ${res.data.imported} new chore(s) imported.`,
+        text: `Synced tasks: ${imported} new chore(s) imported, ${updated} chore(s) updated.`,
       });
       setTimeout(() => setSaveMessage({ show: false, type: '', text: '' }), 3000);
     } catch (err) {

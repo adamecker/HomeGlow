@@ -217,17 +217,48 @@ async function completeGoogleTask(db, userId, taskId) {
   if (!taskId || !userId) return;
   try {
     const accessToken = await getValidUserAccessToken(db, userId);
-    await axios.patch(
-      `${TASKS_API_ENDPOINT}/${encodeURIComponent(taskId)}`,
-      { status: 'completed' },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        timeout: 15000,
+    try {
+      await axios.patch(
+        `https://tasks.googleapis.com/tasks/v1/lists/@default/tasks/${encodeURIComponent(taskId)}`,
+        { status: 'completed' },
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          timeout: 15000,
+        }
+      );
+      return;
+    } catch (patchErr) {
+      if (patchErr.response?.status !== 404) throw patchErr;
+    }
+
+    // If @default returned 404, locate the task across other lists
+    const listsRes = await axios.get('https://tasks.googleapis.com/tasks/v1/users/@me/lists?maxResults=100', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      timeout: 15000,
+    });
+    const lists = Array.isArray(listsRes.data?.items) ? listsRes.data.items : [];
+    for (const list of lists) {
+      if (list.id === '@default') continue;
+      try {
+        await axios.patch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(list.id)}/tasks/${encodeURIComponent(taskId)}`,
+          { status: 'completed' },
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              'Content-Type': 'application/json',
+            },
+            timeout: 15000,
+          }
+        );
+        return;
+      } catch (err) {
+        if (err.response?.status !== 404) throw err;
       }
-    );
+    }
   } catch (error) {
     if (error.response?.status === 403) {
       console.warn(`[GoogleTasks] 403 Forbidden updating task ${taskId} for user ${userId}. Reconnection may be needed for write scope.`);
@@ -237,20 +268,76 @@ async function completeGoogleTask(db, userId, taskId) {
   }
 }
 
+async function fetchAllUserTasks(accessToken) {
+  let listIds = [];
+  try {
+    let listPageToken = null;
+    do {
+      const qs = listPageToken ? `?maxResults=100&pageToken=${encodeURIComponent(listPageToken)}` : '?maxResults=100';
+      const listsRes = await axios.get(`https://tasks.googleapis.com/tasks/v1/users/@me/lists${qs}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 15000,
+      });
+      const items = Array.isArray(listsRes.data?.items) ? listsRes.data.items : [];
+      for (const item of items) {
+        if (item.id) listIds.push(item.id);
+      }
+      listPageToken = listsRes.data?.nextPageToken || null;
+    } while (listPageToken);
+  } catch (err) {
+    console.warn('[GoogleTasks] Failed to list task lists, falling back to @default:', err.message);
+  }
+
+  if (listIds.length === 0) {
+    listIds = ['@default'];
+  }
+
+  const allTasks = [];
+  const seenTaskIds = new Set();
+
+  for (const listId of listIds) {
+    let taskPageToken = null;
+    do {
+      const params = new URLSearchParams({
+        showCompleted: 'true',
+        showHidden: 'true',
+        showDeleted: 'true',
+        maxResults: '100',
+      });
+      if (taskPageToken) {
+        params.set('pageToken', taskPageToken);
+      }
+      const tasksRes = await axios.get(
+        `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks?${params.toString()}`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: 15000,
+        }
+      );
+      const items = Array.isArray(tasksRes.data?.items) ? tasksRes.data.items : [];
+      for (const item of items) {
+        if (item.id && !seenTaskIds.has(item.id)) {
+          seenTaskIds.add(item.id);
+          allTasks.push(item);
+        }
+      }
+      taskPageToken = tasksRes.data?.nextPageToken || null;
+    } while (taskPageToken);
+  }
+
+  return allTasks;
+}
+
 async function syncUserGoogleTasks(db, userId) {
   const account = db.prepare('SELECT id, user_id FROM user_google_tasks_accounts WHERE user_id = ?').get(userId);
-  if (!account) return { synced: 0, imported: 0 };
+  if (!account) return { synced: 0, imported: 0, updated: 0 };
 
   const accessToken = await getValidUserAccessToken(db, userId);
-  const response = await axios.get(`${TASKS_API_ENDPOINT}?showCompleted=true&showHidden=true`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    timeout: 15000,
-  });
-
-  const tasks = Array.isArray(response.data?.items) ? response.data.items : [];
+  const tasks = await fetchAllUserTasks(accessToken);
   const today = getTodayLocalDate();
 
   let importedCount = 0;
+  let updatedCount = 0;
 
   const findScheduleByGoogleTaskId = db.prepare(`
     SELECT cs.id, cs.chore_id, cs.user_id, cs.visible, cs.due_date, c.title, c.clam_value
@@ -295,6 +382,7 @@ async function syncUserGoogleTasks(db, userId) {
     if (task.deleted || task.hidden) {
       if (existingSchedule && existingSchedule.visible === 1) {
         hideSchedule.run(existingSchedule.id);
+        updatedCount++;
       }
       continue;
     }
@@ -312,6 +400,7 @@ async function syncUserGoogleTasks(db, userId) {
             existingSchedule.clam_value || 0,
             existingSchedule.title
           );
+          updatedCount++;
         }
       }
       continue;
@@ -322,11 +411,17 @@ async function syncUserGoogleTasks(db, userId) {
 
     if (existingSchedule) {
       const targetDueDate = dueDate || today;
+      let changed = false;
       if (existingSchedule.due_date !== targetDueDate || existingSchedule.visible !== 1) {
         updateScheduleDueDate.run(targetDueDate, existingSchedule.id);
+        changed = true;
       }
       if (task.title && task.title.trim() !== existingSchedule.title) {
         updateChoreDetails.run(task.title.trim(), task.notes || null, existingSchedule.chore_id);
+        changed = true;
+      }
+      if (changed) {
+        updatedCount++;
       }
       continue;
     }
@@ -348,7 +443,7 @@ async function syncUserGoogleTasks(db, userId) {
     }
   }
 
-  return { synced: tasks.length, imported: importedCount };
+  return { synced: tasks.length, imported: importedCount, updated: updatedCount };
 }
 
 async function syncAllGoogleTasks(db) {
