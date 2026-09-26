@@ -3,12 +3,12 @@ const axios = require('axios');
 const { encrypt, decrypt } = require('../utils/encryption');
 const googleConnection = require('./googleConnection');
 
-const TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks.readonly';
+const TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
 const AUTH_SCOPES = ['openid', 'email', 'profile', TASKS_SCOPE];
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
-const TASKS_API_ENDPOINT = 'https://tasks.googleapis.com/tasks/v1/lists/@default/tasks?showCompleted=false';
+const TASKS_API_ENDPOINT = 'https://tasks.googleapis.com/tasks/v1/lists/@default/tasks';
 
 function deriveTasksRedirectUri(db, request) {
   const override = googleConnection.getOAuthStatus(db).redirect_uri_override;
@@ -213,12 +213,36 @@ function getTodayLocalDate() {
   return `${y}-${m}-${d}`;
 }
 
+async function completeGoogleTask(db, userId, taskId) {
+  if (!taskId || !userId) return;
+  try {
+    const accessToken = await getValidUserAccessToken(db, userId);
+    await axios.patch(
+      `${TASKS_API_ENDPOINT}/${encodeURIComponent(taskId)}`,
+      { status: 'completed' },
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 15000,
+      }
+    );
+  } catch (error) {
+    if (error.response?.status === 403) {
+      console.warn(`[GoogleTasks] 403 Forbidden updating task ${taskId} for user ${userId}. Reconnection may be needed for write scope.`);
+    } else {
+      console.warn(`[GoogleTasks] Error completing Google task ${taskId} for user ${userId}:`, error.message);
+    }
+  }
+}
+
 async function syncUserGoogleTasks(db, userId) {
   const account = db.prepare('SELECT id, user_id FROM user_google_tasks_accounts WHERE user_id = ?').get(userId);
   if (!account) return { synced: 0, imported: 0 };
 
   const accessToken = await getValidUserAccessToken(db, userId);
-  const response = await axios.get(TASKS_API_ENDPOINT, {
+  const response = await axios.get(`${TASKS_API_ENDPOINT}?showCompleted=true&showHidden=true`, {
     headers: { Authorization: `Bearer ${accessToken}` },
     timeout: 15000,
   });
@@ -228,7 +252,27 @@ async function syncUserGoogleTasks(db, userId) {
 
   let importedCount = 0;
 
-  const checkExistingChore = db.prepare('SELECT id FROM chore_schedules WHERE google_task_id = ?');
+  const findScheduleByGoogleTaskId = db.prepare(`
+    SELECT cs.id, cs.chore_id, cs.user_id, cs.visible, c.title, c.clam_value
+    FROM chore_schedules cs
+    JOIN chores c ON cs.chore_id = c.id
+    WHERE cs.google_task_id = ?
+  `);
+  const checkChoreCompletedToday = db.prepare(`
+    SELECT id FROM chore_history
+    WHERE chore_schedule_id = ? AND date = ? AND kind = 'completion'
+  `);
+  const insertChoreHistory = db.prepare(`
+    INSERT INTO chore_history (user_id, chore_schedule_id, date, clam_value, title, kind)
+    VALUES (?, ?, ?, ?, ?, 'completion')
+  `);
+  const deleteMissedHistory = db.prepare(`
+    DELETE FROM chore_history
+    WHERE chore_schedule_id = ? AND date = ? AND kind = 'missed'
+  `);
+  const hideSchedule = db.prepare(`
+    UPDATE chore_schedules SET visible = 0 WHERE id = ?
+  `);
   const insertChore = db.prepare('INSERT INTO chores (title, description, clam_value, icon) VALUES (?, ?, 0, ?)');
   const insertSchedule = db.prepare(`
     INSERT INTO chore_schedules (
@@ -237,29 +281,52 @@ async function syncUserGoogleTasks(db, userId) {
   `);
 
   for (const task of tasks) {
-    if (!task.id || !task.title || task.status === 'completed' || task.deleted || task.hidden) {
+    if (!task.id) continue;
+
+    const existingSchedule = findScheduleByGoogleTaskId.get(task.id);
+
+    // Case B: Deleted or hidden in Google Tasks
+    if (task.deleted || task.hidden) {
+      if (existingSchedule && existingSchedule.visible === 1) {
+        hideSchedule.run(existingSchedule.id);
+      }
       continue;
     }
 
+    // Case A: Marked completed in Google Tasks
+    if (task.status === 'completed') {
+      if (existingSchedule) {
+        const isCompleted = checkChoreCompletedToday.get(existingSchedule.id, today);
+        if (!isCompleted) {
+          deleteMissedHistory.run(existingSchedule.id, today);
+          insertChoreHistory.run(
+            existingSchedule.user_id,
+            existingSchedule.id,
+            today,
+            existingSchedule.clam_value || 0,
+            existingSchedule.title
+          );
+        }
+      }
+      continue;
+    }
+
+    // Case C: Uncompleted task due today or overdue
     const dueDate = parseDueDateOnly(task.due);
-    // Filter for tasks that are due today, overdue, or have no due date specified
     if (dueDate && dueDate > today) {
       continue;
     }
 
-    const existing = checkExistingChore.get(task.id);
-    if (existing) {
-      continue;
+    if (!existingSchedule && task.title) {
+      const choreResult = insertChore.run(task.title.trim(), task.notes || null, '📋');
+      insertSchedule.run(
+        choreResult.lastInsertRowid,
+        userId,
+        dueDate || today,
+        task.id
+      );
+      importedCount++;
     }
-
-    const choreResult = insertChore.run(task.title.trim(), task.notes || null, '📋');
-    insertSchedule.run(
-      choreResult.lastInsertRowid,
-      userId,
-      dueDate || today,
-      task.id
-    );
-    importedCount++;
   }
 
   return { synced: tasks.length, imported: importedCount };
@@ -284,6 +351,7 @@ module.exports = {
   buildUserAuthUrl,
   handleOAuthCallback,
   getUserTasksStatus,
+  completeGoogleTask,
   disconnectUserTasks,
   syncUserGoogleTasks,
   syncAllGoogleTasks,

@@ -3396,6 +3396,13 @@ fastify.post('/api/chores/complete', async (request, reply) => {
     db.prepare("DELETE FROM chore_history WHERE chore_schedule_id = ? AND user_id = ? AND date = ? AND kind = 'missed'").run(chore_schedule_id, user_id, date);
     db.prepare("INSERT INTO chore_history (user_id, chore_schedule_id, date, clam_value, title, kind) VALUES (?, ?, ?, ?, ?, 'completion')").run(user_id, chore_schedule_id, date, schedule.clam_value, schedule.title);
 
+    // Outbound sync to Google Tasks if linked
+    if (schedule.google_task_id) {
+      googleTasks.completeGoogleTask(db, user_id, schedule.google_task_id).catch((err) => {
+        console.warn(`[GoogleTasks] Failed to sync completion to Google Tasks:`, err.message);
+      });
+    }
+
     // Pay out a pending transfer bonus (attached by the parent when moving
     // this chore to a kid whose day was already complete) and clear it so it
     // pays only once.
