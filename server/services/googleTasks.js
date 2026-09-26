@@ -345,8 +345,8 @@ async function syncUserGoogleTasks(db, userId) {
     JOIN chores c ON cs.chore_id = c.id
     WHERE cs.google_task_id = ?
   `);
-  const updateScheduleDueDate = db.prepare(`
-    UPDATE chore_schedules SET due_date = ?, visible = 1 WHERE id = ?
+  const updateScheduleDetails = db.prepare(`
+    UPDATE chore_schedules SET due_date = ?, visible = ? WHERE id = ?
   `);
   const updateChoreDetails = db.prepare(`
     UPDATE chores SET title = ?, description = ? WHERE id = ?
@@ -408,12 +408,14 @@ async function syncUserGoogleTasks(db, userId) {
 
     // Case C: Uncompleted task
     const dueDate = parseDueDateOnly(task.due);
+    const isDue = !dueDate || dueDate <= today;
+    const targetVisible = isDue ? 1 : 0;
+    const targetDueDate = dueDate || today;
 
     if (existingSchedule) {
-      const targetDueDate = dueDate || today;
       let changed = false;
-      if (existingSchedule.due_date !== targetDueDate || existingSchedule.visible !== 1) {
-        updateScheduleDueDate.run(targetDueDate, existingSchedule.id);
+      if (existingSchedule.due_date !== targetDueDate || existingSchedule.visible !== targetVisible) {
+        updateScheduleDetails.run(targetDueDate, targetVisible, existingSchedule.id);
         changed = true;
       }
       if (task.title && task.title.trim() !== existingSchedule.title) {
@@ -427,7 +429,7 @@ async function syncUserGoogleTasks(db, userId) {
     }
 
     // New task: only import if due today, overdue, or has no due date set
-    if (dueDate && dueDate > today) {
+    if (!isDue) {
       continue;
     }
 
@@ -436,7 +438,7 @@ async function syncUserGoogleTasks(db, userId) {
       insertSchedule.run(
         choreResult.lastInsertRowid,
         userId,
-        dueDate || today,
+        targetDueDate,
         task.id
       );
       importedCount++;

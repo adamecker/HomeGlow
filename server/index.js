@@ -2695,6 +2695,8 @@ fastify.get('/api/chore-schedules', async (request, reply) => {
       params.push(1);
       conditions.push('(cs.duration IS NULL OR cs.duration NOT IN (?, ?))');
       params.push('until-completed', 'once-completed');
+      conditions.push('(cs.due_date IS NULL OR cs.due_date <= ?)');
+      params.push(todayStr);
     }
     if (chore_id !== undefined) {
       conditions.push('cs.chore_id = ?');
@@ -3290,6 +3292,9 @@ function getTodaysRegularChoresForUser(userId, dateStr, referenceNow = new Date(
   for (const schedule of regularChores) {
     // schedules without crontab are one-time and always part of today's chores
     if (!schedule.crontab) {
+      if (schedule.due_date && schedule.due_date > dateStr) {
+        continue;
+      }
       todaysChores.push(schedule);
       continue;
     }
