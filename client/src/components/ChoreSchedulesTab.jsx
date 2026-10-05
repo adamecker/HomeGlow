@@ -166,7 +166,7 @@ function buildDueDateFromOffset(createdAt, dueDays) {
 
 const defaultScheduleForm = {
   chore_id: '',
-  user_id: '', user_ids: [],
+  user_id: '',
   ...DEFAULT_SCHEDULE_FIELDS,
   visible: true,
   due_date: '',
@@ -252,17 +252,14 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const openEditSchedule = (schedule) => {
     setEditingSchedule(schedule);
-    const isCalendar = !!schedule.calendar_match;
-    const isOneTime = !schedule.crontab && !isCalendar;
+    const isOneTime = !schedule.crontab;
     const isOnceCompleted = schedule.duration === 'once-completed';
-    let scheduleMode = isCalendar ? 'calendar' : 'preset';
+    let scheduleMode = 'preset';
     let selectedPreset = '0 0 * * *';
     let selectedDays = [];
     let customCrontab = '';
 
-    if (isCalendar) {
-      scheduleMode = 'calendar';
-    } else if (isOnceCompleted) {
+    if (isOnceCompleted) {
       scheduleMode = 'after-completion';
       customCrontab = schedule.crontab || '0 0 * * *';
     } else if (!isOneTime && schedule.crontab) {
@@ -285,7 +282,6 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
     setScheduleForm({
       chore_id: schedule.chore_id,
       user_id: schedule.user_id ?? '',
-      user_ids: [],
       scheduleMode,
       selectedPreset,
       selectedDays,
@@ -304,7 +300,6 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
       // Pre-migration rows may lack these columns; treat missing as enabled.
       transferable: schedule.transferable === undefined ? true : !!schedule.transferable,
       can_snooze: schedule.can_snooze === undefined ? true : !!schedule.can_snooze,
-      calendar_match: schedule.calendar_match || ''
     });
     setCrontabError(null);
     setScheduleDialogOpen(true);
@@ -317,9 +312,8 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
 
   const handleSaveSchedule = async () => {
     const cron = computeCrontab(scheduleForm);
-    const isCalendarMode = !scheduleForm.isOneTime && scheduleForm.scheduleMode === 'calendar';
     const isAfterCompletionMode = !scheduleForm.isOneTime && scheduleForm.scheduleMode === 'after-completion';
-    const err = (scheduleForm.isOneTime || isCalendarMode || isAfterCompletionMode) ? null : validateCrontab(cron);
+    const err = (scheduleForm.isOneTime || isAfterCompletionMode) ? null : validateCrontab(cron);
     if (err) { setCrontabError(err); return; }
 
     setSavingSchedule(true);
@@ -340,15 +334,14 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
         return;
       }
 
-      const isMultiCreate = !editingSchedule && Array.isArray(scheduleForm.user_ids) && scheduleForm.user_ids.length > 0;
       const durationValue = !scheduleForm.isOneTime
         ? (isAfterCompletionMode ? 'once-completed' : scheduleForm.duration)
         : 'day-of';
 
       const payload = {
         chore_id: scheduleForm.chore_id,
-        ...(isMultiCreate ? { user_ids: scheduleForm.user_ids } : { user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id }),
-        crontab: (scheduleForm.duration === 'once-completed' || scheduleForm.isOneTime || isCalendarMode) ? null : (cron || null),
+        user_id: scheduleForm.user_id === '' ? null : scheduleForm.user_id,
+        crontab: (scheduleForm.duration === 'once-completed' || scheduleForm.isOneTime) ? null : (cron || null),
         duration: durationValue,
         interval: normalizedInterval,
         visible: scheduleForm.visible ? 1 : 0,
@@ -361,7 +354,6 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
           : null,
         transferable: scheduleForm.transferable ? 1 : 0,
         can_snooze: scheduleForm.can_snooze ? 1 : 0,
-        calendar_match: isCalendarMode ? (scheduleForm.calendar_match?.trim() || null) : null
       };
 
       if (editingSchedule) {
@@ -718,27 +710,17 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
                       editing the schedule. */}
                   <TableCell data-label={t('chores:schedules.nextOccurrence')}>
                     <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                      {s.calendar_match ? (
-                      <Chip
-                        label={`📅 ${t('chores:schedules.calendarOn', { keyword: s.calendar_match })} ${s.calendar_matched_today ? '✓' : '✗'}`}
-                        size="small"
-                        color={s.calendar_matched_today ? "success" : "default"}
-                        variant="outlined"
-                        title={s.calendar_matched_today
-                          ? t('chores:schedules.calendarMatchToday')
-                          : t('chores:schedules.calendarNoMatchToday')}
-                      />
-                    ) : getNextOccurrence(s.crontab, s)}
+                      {getNextOccurrence(s.crontab, s)}
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.duration')}>
-                    {(s.crontab || s.calendar_match) && s.duration === 'until-completed' ? (
+                    {s.crontab && s.duration === 'until-completed' ? (
                       <Chip label={t('chores:schedules.untilCompleted')} size="small" color="warning" />
-                    ) : (s.crontab || s.calendar_match) && s.duration === 'once-completed' ? (
+                    ) : s.crontab && s.duration === 'once-completed' ? (
                       <Chip label={s.interval
                           ? t('chores:schedules.onceCompletedWithInterval', { interval: formatScheduleInterval(s.interval) })
                           : t('chores:schedules.onceCompleted')} size="small" color="secondary" />
-                    ) : (s.crontab || s.calendar_match) ? (
+                    ) : s.crontab ? (
                       <Chip label={t('chores:schedules.dayOf')} size="small" variant="outlined" />
                     ) : (
                       <Typography variant="caption" color="text.secondary">—</Typography>
@@ -911,52 +893,19 @@ export default function ChoreSchedulesTab({ saveMessage, setSaveMessage }) {
             </FormControl>
 
             {!editingSchedule ? (
-              <Box>
-                <FormControl fullWidth size="small">
-                  <InputLabel id="multi-user-label">{t('chores:schedules.assignToUsers')}</InputLabel>
-                  <Select
-                    labelId="multi-user-label"
-                    multiple
-                    value={scheduleForm.user_ids}
-                    onChange={(e) => {
-                      const val = typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value;
-                      setScheduleForm({ ...scheduleForm, user_ids: val });
-                    }}
-                    label={t('chores:schedules.assignToUsers')}
-                    renderValue={(selected) => (
-                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-                        {selected.map((uid) => {
-                          const u = users.find(user => user.id === uid);
-                          return <Chip key={uid} size="small" label={u ? u.username : uid} />;
-                        })}
-                      </Box>
-                    )}
-                  >
-                    {users.map((u) => (
-                      <MenuItem key={u.id} value={u.id}>
-                        <Checkbox checked={scheduleForm.user_ids.indexOf(u.id) > -1} />
-                        <ListItemText primary={u.username} />
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-                <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1, mt: 0.5 }}>
-                  <Button
-                    size="small"
-                    sx={{ fontSize: '0.75rem', py: 0 }}
-                    onClick={() => setScheduleForm({ ...scheduleForm, user_ids: users.map(u => u.id) })}
-                  >
-                    Select All
-                  </Button>
-                  <Button
-                    size="small"
-                    sx={{ fontSize: '0.75rem', py: 0 }}
-                    onClick={() => setScheduleForm({ ...scheduleForm, user_ids: [] })}
-                  >
-                    Clear
-                  </Button>
-                </Box>
-              </Box>
+              <FormControl fullWidth size="small">
+                <InputLabel>{t('chores:schedules.user')}</InputLabel>
+                <Select
+                  value={scheduleForm.user_id}
+                  label={t('chores:schedules.user')}
+                  onChange={(e) => setScheduleForm({ ...scheduleForm, user_id: e.target.value })}
+                >
+                  <MenuItem value="">{t('chores:schedules.allUsers')}</MenuItem>
+                  {users.map((u) => (
+                    <MenuItem key={u.id} value={u.id}>{u.username}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             ) : (
               <FormControl fullWidth size="small">
                 <InputLabel>{t('chores:schedules.user')}</InputLabel>
