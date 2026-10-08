@@ -299,6 +299,8 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
   const [editingChore, setEditingChore] = useState(null);
   const [choreForm, setChoreForm] = useState(defaultChoreForm);
   const [deleteChoreDialog, setDeleteChoreDialog] = useState({ open: false, chore: null });
+  const [selectedChoreIds, setSelectedChoreIds] = useState(new Set());
+  const [bulkDeleteDialog, setBulkDeleteDialog] = useState(false);
   const [savingChore, setSavingChore] = useState(false);
 
   const [filterUser, setFilterUser] = useState('');
@@ -599,6 +601,37 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
     }
   };
 
+  const handleBulkDeleteChores = async () => {
+    const ids = [...selectedChoreIds];
+    try {
+      const res = await axios.delete(`${API_BASE_URL}/api/chores/bulk`, { data: { ids } });
+      const deleted = res.data?.deleted ?? ids.length;
+      setSelectedChoreIds(new Set());
+      setBulkDeleteDialog(false);
+      await fetchAll();
+      showMessage('success', t('chores:schedules.bulkDeleteSuccess', { count: deleted }));
+    } catch {
+      showMessage('error', t('chores:schedules.bulkDeleteError'));
+    }
+  };
+
+  const toggleChoreSelection = (id) => {
+    setSelectedChoreIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllChores = () => {
+    if (selectedChoreIds.size === sortedChores.length) {
+      setSelectedChoreIds(new Set());
+    } else {
+      setSelectedChoreIds(new Set(sortedChores.map(c => c.id)));
+    }
+  };
+
   const getUserName = (userId) => {
     if (userId === null || userId === undefined || userId === 0) return 'Unassigned';
     const user = users.find(u => u.id === userId);
@@ -704,9 +737,36 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
       </Alert>
 
       <TableContainer component={Paper} sx={{ mb: 4 }}>
+        {selectedChoreIds.size > 0 && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, p: 1, bgcolor: 'action.hover' }}>
+            <Typography variant="body2" sx={{ ml: 1 }}>
+              {t('chores:schedules.selectedCount', { count: selectedChoreIds.size })}
+            </Typography>
+            <Button
+              size="small"
+              variant="contained"
+              color="error"
+              startIcon={<Delete />}
+              onClick={() => setBulkDeleteDialog(true)}
+            >
+              {t('chores:schedules.deleteSelected')}
+            </Button>
+            <Button size="small" onClick={() => setSelectedChoreIds(new Set())}>
+              {t('common:actions.clear')}
+            </Button>
+          </Box>
+        )}
         <Table size="small" sx={compactStackedTableSx}>
           <TableHead>
             <TableRow>
+              <TableCell padding="checkbox">
+                <Checkbox
+                  size="small"
+                  checked={sortedChores.length > 0 && selectedChoreIds.size === sortedChores.length}
+                  indeterminate={selectedChoreIds.size > 0 && selectedChoreIds.size < sortedChores.length}
+                  onChange={toggleSelectAllChores}
+                />
+              </TableCell>
               <SortableHeader column="title" sort={choreSort} onSort={sortChores}>
                 {t('common:labels.title')}
               </SortableHeader>
@@ -723,7 +783,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
           <TableBody>
             {chores.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} align="center" sx={{ py: 3 }}>
+                <TableCell colSpan={6} align="center" sx={{ py: 3 }}>
                   <Typography color="text.secondary">{t('chores:schedules.noChores')}</Typography>
                 </TableCell>
               </TableRow>
