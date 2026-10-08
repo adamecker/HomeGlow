@@ -789,7 +789,14 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
               </TableRow>
             ) : (
               sortedChores.map(c => (
-                <TableRow key={c.id}>
+                <TableRow key={c.id} selected={selectedChoreIds.has(c.id)}>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={selectedChoreIds.has(c.id)}
+                      onChange={() => toggleChoreSelection(c.id)}
+                    />
+                  </TableCell>
                   <TableCell data-label={t('common:labels.title')}>
                     <Typography variant="body2" fontWeight="bold">
                       {/* Inline rather than its own column: this table stacks
@@ -1200,6 +1207,30 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
         <DialogActions>
           <Button onClick={() => setDeleteChoreDialog({ open: false, chore: null })}>{t('common:actions.cancel')}</Button>
           <Button onClick={handleDeleteChore} variant="contained" color="error" startIcon={<Delete />}>
+            {t('common:actions.delete')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── BULK DELETE DIALOG ────────────────────────────── */}
+      <Dialog open={bulkDeleteDialog} onClose={() => setBulkDeleteDialog(false)} maxWidth="xs" fullWidth fullScreen={isMobile}>
+        <DialogTitle>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Warning color="error" />
+            {t('chores:schedules.bulkDeleteTitle', { count: selectedChoreIds.size })}
+          </Box>
+        </DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {t('chores:schedules.bulkDeleteWarning')}
+          </Alert>
+          <Typography variant="body2">
+            {t('chores:schedules.bulkDeletePrompt', { count: selectedChoreIds.size })}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setBulkDeleteDialog(false)}>{t('common:actions.cancel')}</Button>
+          <Button onClick={handleBulkDeleteChores} variant="contained" color="error" startIcon={<Delete />}>
             {t('common:actions.delete')}
           </Button>
         </DialogActions>
