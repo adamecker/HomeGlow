@@ -142,7 +142,10 @@ for the developer-facing detail and the `HomeGlow.*` SDK wrappers.
 | POST | `/api/plugin/v1/storage/:pluginId/:key/increment` | Atomic `{ path, delta }` numeric increment. |
 | GET | `/api/plugin/v1/settings/:pluginId` | Effective declared settings (`?device=` for device scope). |
 | PUT | `/api/plugin/v1/settings/:pluginId` | Write declared settings (validated against the manifest). |
-| GET | `/api/plugin/v1/events/stream` | SSE stream of core events (`clam.*`, `chore.*`). |
+| GET | `/api/plugin/v1/events/stream` | SSE stream of core events (`clam.*`, `chore.*`, `ha.state`). |
+| GET | `/api/plugin/v1/ha/:pluginId/state` | A Home Assistant panel's (or a plugin's declared) entities, filtered attributes, which it may operate, and whether the live link is up. Answered from memory. |
+| POST | `/api/plugin/v1/ha/:pluginId/action` | `{ entity` or `entities, action, value, pin, device }`, checked against the panel's recipe or the plugin's manifest and turned into one service call each. 401 `needsPin` for unlocking, disarming or opening a garage door under PIN protection (not from a display that remembers the PIN); 429 over 10 a second. |
+| GET | `/api/plugin/v1/ha/:pluginId/camera/:entityId` | A camera snapshot, only for a camera on the panel. |
 
 ### Chore notification sounds
 | Method | Path | Purpose |
@@ -242,6 +245,7 @@ Every provider returns the same payload — see
 | Method | Path | Purpose |
 | --- | --- | --- |
 | GET | `/api/weather` | Current conditions, 3-day forecast, hourly series, air quality. Params: `location` or `lat`+`lon`, `units` (`imperial`\|`metric`), `lang`, `refresh=1`. |
+| GET | `/api/weather/condition` | `{condition, checkedAt, maxAgeMs}` for a theme's weather scenes: the current condition token at `lat`/`lon` (Home Assistant needs neither). Answered from any reading of the place under 10 minutes old, whatever its units or language, else one ordinary fetch. 400 when OpenWeatherMap has no location. |
 | GET | `/api/weather/geocode` | Resolve a free-text location to `{lat, lon, resolvedName}`. With **no** `q`, returns Home Assistant's own configured location when that is the provider. |
 | GET | `/api/sun` | `{sunrise, sunset, alwaysUp, alwaysDown}` (unix seconds) computed from `lat`/`lon`. No provider or API key involved — auto dark mode works with nothing configured. |
 
@@ -293,6 +297,27 @@ server-side.
 | GET | `/api/connections/homeassistant/weather-entities` | List `weather.*` entities for the Admin Panel picker. |
 | DELETE | `/api/connections/homeassistant` | Clear the stored connection. |
 | GET | `/api/connections/weather/status` | Active provider, whether it is usable, and why not if it isn't. |
+
+### Home Assistant panels (issue #252)
+Panels are recipes the builder saves (`ha_panels`) and one built-in template
+draws (`server/ha-panels/template.html`); each is also a plugin row
+(`source = 'builder'`), so it is placed like any plugin. Rules:
+`services/haPanels.js`; live link: `services/haLive.js`; routes:
+`routes/haPanels.js`. Saving the Home Assistant connection restarts the link.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/ha-panels` | Panels, whether Home Assistant is connected, PIN protection, the live link's state, the icon names. |
+| GET | `/api/ha-panels/entities` | What the picker offers: supported entities (hidden and disabled ones left out), with areas from the registries. |
+| GET | `/api/ha-panels/preview-state?entities=` | Filtered states for the builder's live preview (read only). |
+| GET | `/api/ha-panels/history?limit=` | What panels did, newest first (the last 1000 are kept). |
+| PUT | `/api/ha-panels/settings` | `{ pinProtection }`. |
+| POST | `/api/ha-panels` | `{ recipe }` → a new panel and its plugin (`ha-<name>.html`). 400 with `errors` for a recipe it can't accept. |
+| PUT | `/api/ha-panels/:id` | `{ recipe }`. The plugin id and file stay the same. |
+| POST | `/api/ha-panels/:id/duplicate` | A copy, named "… copy". |
+| POST | `/api/ha-panels/import` | `{ recipe, replacements: { old: new } }` → the panel and the entity ids still `missing`. |
+| DELETE | `/api/ha-panels/:id` | Delete the panel and its plugin. Deleting the plugin from the Plugins list does the same. |
+| GET | `/ha-panels/preview` | The template on its own, for the builder's preview frame. |
 
 ### Photo sources & media
 | Method | Path | Purpose |

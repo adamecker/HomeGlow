@@ -43,7 +43,21 @@ const LOG_FORMAT_RESULT = resolveLogFormat(process.env.LOG_FORMAT);
 const LOG_FORMAT = LOG_FORMAT_RESULT.format;
 
 const fastify = require('fastify')({
-  logger: { level: LOG_LEVEL, transport: transportFor(LOG_FORMAT) },
+  logger: {
+    level: LOG_LEVEL,
+    transport: transportFor(LOG_FORMAT),
+    // Fastify's request lines without the query string, which can carry a
+    // credential: an OAuth callback's ?code=, or a proxy target's token.
+    serializers: {
+      req: (req) => ({
+        method: req.method,
+        url: String(req.url || '').split('?')[0],
+        host: req.host,
+        remoteAddress: req.ip,
+        remotePort: req.socket ? req.socket.remotePort : undefined,
+      }),
+    },
+  },
 });
 
 // From here on, every console.* call in this process -- this file, the
@@ -202,6 +216,9 @@ axios.interceptors.request.use((config) => {
 let calendarSyncService = null;
 
 const pluginEvents = require('./services/pluginEvents');
+const haPanelRules = require('./services/haPanels');
+const { HaLive } = require('./services/haLive');
+const { registerHaPanelRoutes, lazyDb } = require('./routes/haPanels');
 const initializeDatabase = require('./migrations/initializeDatabase');
 const migrateChoresDatabase = require('./migrations/migrateChoresDatabase');
 const migrateClamsToHistory = require('./migrations/migrateClamsToHistory');
@@ -238,6 +255,7 @@ const schemaMigrations = [
   { schemaId: 30, migrationPath: './migrations/schema30-choreSpawn', },
   { schemaId: 31, migrationPath: './migrations/schema31-removeCalendarMatch', },
   { schemaId: 32, migrationPath: './migrations/schema32-removeSpawn', },
+  { schemaId: 33, migrationPath: './migrations/schema33-haPanels', },
 ];
 
 const ALLOWED_SCHEDULE_DURATIONS = new Set(['day-of', 'until-completed', 'once-completed']);
@@ -618,9 +636,11 @@ fastify.get('/widgets/:filename', async (request, reply) => {
   try {
     let content;
     let pluginId = null;
-    const row = db.prepare('SELECT content, plugin_id FROM plugins WHERE filename = ?').get(filename);
+    const row = db.prepare('SELECT id, content, plugin_id, source FROM plugins WHERE filename = ?').get(filename);
     if (row) {
-      content = row.content;
+      // A Home Assistant panel is drawn by the built-in template from its
+      // recipe (issue #252), so every panel gets the current template.
+      content = row.source === 'builder' ? haPanels.renderPanel(row.id, row.plugin_id) : row.content;
       pluginId = row.plugin_id;
     } else {
       const filePath = path.join(__dirname, 'widgets', filename);
@@ -850,6 +870,11 @@ function extractPluginManifest(htmlContent) {
   if (manifest.storage !== undefined && typeof manifest.storage !== 'boolean') {
     errors.push('storage must be a boolean.');
   }
+  // Home Assistant entities the plugin may read and operate through
+  // /api/plugin/v1/ha (issue #252), under the same rules as a built panel.
+  if (manifest.homeAssistant !== undefined) {
+    errors.push(...haPanelRules.validateManifestAccess(manifest.homeAssistant));
+  }
   if (manifest.events !== undefined) {
     if (!Array.isArray(manifest.events) || manifest.events.some((event) => typeof event !== 'string')) {
       errors.push('events must be an array of strings.');
@@ -956,6 +981,13 @@ function installPluginRow({ filename, fallbackName, content, source, originalUrl
     return { error: `Invalid plugin manifest: ${errors.join(' ')}`, status: 400 };
   }
 
+  // A Home Assistant panel's file is the builder's: an upload or install of
+  // the same name would silently replace the panel (issue #252).
+  const existingSource = db.prepare('SELECT source FROM plugins WHERE filename = ?').get(filename)?.source;
+  if (existingSource === 'builder' && source !== 'builder') {
+    return { error: `${filename} is a Home Assistant panel. Edit it in Admin → Dashboard → Home Assistant, or upload under another name.`, status: 409 };
+  }
+
   const pluginId = manifest ? manifest.id : null;
   if (pluginId) {
     const conflict = db.prepare('SELECT filename FROM plugins WHERE plugin_id = ? AND filename != ?')
@@ -991,6 +1023,23 @@ function installPluginRow({ filename, fallbackName, content, source, originalUrl
 
   return { pluginId };
 }
+
+// Home Assistant panels (issue #252): one live link to Home Assistant for
+// every panel, and the builder's and panels' routes (routes/haPanels.js).
+// Changes are announced to plugins as `ha.state`, a nudge to read again; the
+// state itself only ever comes from the checked state route.
+const haDb = lazyDb(() => db);
+const haLive = new HaLive({
+  db: haDb,
+  onChange: (entityIds) => pluginEvents.emit('ha.state', { entityIds }),
+});
+const haPanels = registerHaPanelRoutes(fastify, {
+  db: haDb,
+  live: haLive,
+  ha: homeAssistant,
+  demoMode: DEMO_MODE,
+  installPluginRow,
+});
 
 // Helper: Load legacy on-disk widget registry (kept for the debug endpoint)
 async function loadWidgetRegistry() {
@@ -1047,6 +1096,9 @@ fastify.post('/api/widgets/upload', async (request, reply) => {
       return reply.status(result.status).send({ error: result.error });
     }
 
+    // A plugin that declares Home Assistant entities: watch them live.
+    haPanels.refreshWatched();
+
     return { success: true, message: 'Widget uploaded!', widget: widgetName, pluginId: result.pluginId || null };
   } catch (err) {
     console.error('Widget upload error:', err);
@@ -1077,6 +1129,9 @@ fastify.delete('/api/widgets/:filename', async (request, reply) => {
   try {
     const pluginRow = db.prepare('SELECT plugin_id FROM plugins WHERE filename = ?').get(filename);
     const result = db.prepare('DELETE FROM plugins WHERE filename = ?').run(filename);
+    // A Home Assistant panel's recipe went with it (ON DELETE CASCADE); stop
+    // watching what nothing shows any more.
+    haPanels.refreshWatched();
 
     if (purgeData && pluginRow?.plugin_id) {
       const pluginId = pluginRow.plugin_id;
@@ -1914,6 +1969,8 @@ fastify.post('/api/widgets/github/install', async (request, reply) => {
       return reply.status(result.status).send({ error: result.error });
     }
 
+    haPanels.refreshWatched();
+
     console.log(`Successfully installed widget: ${sanitizedFilename}`);
     return {
       success: true,
@@ -2029,6 +2086,84 @@ async function applySchemaMigrations(currentSchemaId) {
     console.log(`Running schema migration path ${migration.migrationPath} (target schema ID: ${migration.schemaId})`);
     runSchemaMigrationModule(migration);
   }
+}
+
+// Sticky schedules (until-completed, once-completed) are never shown on the
+// dashboard themselves: on a day one fires it gets a visible one-time child,
+// and that is what appears and is completed. This creates today's child for
+// each sticky parent that fires on `today` and has no open child yet, and
+// returns the children it created.
+//
+// The nightly job runs it for every schedule. Creating or editing a schedule
+// runs it for that one (`scheduleIds`), so a chore set up during the day
+// appears at once rather than at midnight, or, for one that fires only on
+// some days, not until the next of them (issue #256). The "no open child"
+// test is what keeps the two from making the same chore twice: a child stays
+// visible until the nightly cleanup, completed or not.
+function spawnStickyChildren(today, scheduleIds = null) {
+  if (Array.isArray(scheduleIds) && scheduleIds.length === 0) return [];
+  const onlyThese = Array.isArray(scheduleIds) ? `AND cs.id IN (${scheduleIds.map(() => '?').join(',')})` : '';
+  const stickyParentSchedules = db.prepare(`
+    SELECT cs.id, cs.chore_id, cs.user_id, cs.crontab, cs.duration, cs.interval,
+           cs.created_at, cs.due_date, cs.due_time, cs.sound_enabled, cs.sound, cs.reminder_interval_minutes
+    FROM chore_schedules cs
+    WHERE cs.crontab IS NOT NULL
+      AND cs.duration IN ('until-completed', 'once-completed')
+      AND cs.visible = 1
+      ${onlyThese}
+      AND NOT EXISTS (
+        SELECT 1 FROM chore_schedules child
+        WHERE child.crontab IS NULL
+          AND child.visible = 1
+          AND (
+            child.parent_schedule_id = cs.id
+            OR (
+              child.parent_schedule_id IS NULL
+              AND child.chore_id = cs.chore_id
+              AND (
+                (child.user_id = cs.user_id)
+                OR (child.user_id IS NULL AND cs.user_id IS NULL)
+              )
+            )
+          )
+      )
+  `).all(...(Array.isArray(scheduleIds) ? scheduleIds : []));
+
+  const created = [];
+  for (const schedule of stickyParentSchedules) {
+    let firesToday;
+    try {
+      firesToday = cronFiresOnDate(schedule.crontab, today);
+    } catch (parseError) {
+      console.warn(`Skipping sticky schedule ${schedule.id} due to invalid crontab: ${schedule.crontab}`);
+      continue;
+    }
+    if (!firesToday) continue;
+
+    const dueDateOffset = calculateDateOffsetDays(schedule.created_at, schedule.due_date);
+    const childDueDate = dueDateOffset === null
+      ? (schedule.due_date || null)
+      : addDaysToDateOnly(today, dueDateOffset);
+
+    created.push(db.prepare(`
+      INSERT INTO chore_schedules (
+        chore_id, user_id, crontab, duration, visible, parent_schedule_id,
+        due_date, due_time, sound_enabled, sound, reminder_interval_minutes
+      )
+      VALUES (?, ?, NULL, 'day-of', 1, ?, ?, ?, ?, ?, ?)
+      RETURNING *
+    `).get(
+      schedule.chore_id,
+      schedule.user_id,
+      schedule.id,
+      childDueDate,
+      schedule.due_time || null,
+      schedule.sound_enabled ? 1 : 0,
+      schedule.sound || null,
+      schedule.reminder_interval_minutes || null
+    ));
+  }
+  return created;
 }
 
 async function dailyBackgroundProcessing() {
@@ -2160,72 +2295,11 @@ async function dailyBackgroundProcessing() {
     }
 
 
-    // Handle sticky schedules: create one-time children for until-completed and once-completed parents that trigger today.
-    const stickyParentSchedules = db.prepare(`
-      SELECT cs.id, cs.chore_id, cs.user_id, cs.crontab, cs.duration, cs.interval,
-             cs.created_at, cs.due_date, cs.due_time, cs.sound_enabled, cs.sound, cs.reminder_interval_minutes
-      FROM chore_schedules cs
-      WHERE cs.crontab IS NOT NULL
-        AND cs.duration IN ('until-completed', 'once-completed')
-        AND cs.visible = 1
-        AND NOT EXISTS (
-          SELECT 1 FROM chore_schedules child
-          WHERE child.crontab IS NULL
-            AND child.visible = 1
-            AND (
-              child.parent_schedule_id = cs.id
-              OR (
-                child.parent_schedule_id IS NULL
-                AND child.chore_id = cs.chore_id
-                AND (
-                  (child.user_id = cs.user_id)
-                  OR (child.user_id IS NULL AND cs.user_id IS NULL)
-                )
-              )
-            )
-        )
-    `).all();
-    console.log(`Found ${stickyParentSchedules.length} sticky schedules to check`);
-
-    let stickySchedulesCreated = 0;
-    const triggeredSchedules = [];
-    for (const schedule of stickyParentSchedules) {
-      let firesToday;
-      try {
-        firesToday = cronFiresOnDate(schedule.crontab, today);
-      } catch (parseError) {
-        console.warn(`Skipping sticky schedule ${schedule.id} due to invalid crontab: ${schedule.crontab}`);
-        continue;
-      }
-
-      if (firesToday) {
-        const dueDateOffset = calculateDateOffsetDays(schedule.created_at, schedule.due_date);
-        const childDueDate = dueDateOffset === null
-          ? (schedule.due_date || null)
-          : addDaysToDateOnly(today, dueDateOffset);
-
-        const scheduleResult = db.prepare(`
-          INSERT INTO chore_schedules (
-            chore_id, user_id, crontab, duration, visible, parent_schedule_id,
-            due_date, due_time, sound_enabled, sound, reminder_interval_minutes
-          )
-          VALUES (?, ?, NULL, 'day-of', 1, ?, ?, ?, ?, ?, ?)
-          RETURNING *
-        `).get(
-          schedule.chore_id,
-          schedule.user_id,
-          schedule.id,
-          childDueDate,
-          schedule.due_time || null,
-          schedule.sound_enabled ? 1 : 0,
-          schedule.sound || null,
-          schedule.reminder_interval_minutes || null
-        );
-
-        triggeredSchedules.push(scheduleResult);
-        stickySchedulesCreated++;
-      }
-    }
+    // Sticky schedules: today's one-time child for each until-completed and
+    // once-completed parent that fires today and has none open yet.
+    const triggeredSchedules = spawnStickyChildren(today);
+    console.log(`Created ${triggeredSchedules.length} sticky chore(s) for today`);
+    const stickySchedulesCreated = triggeredSchedules.length;
     results = {
       ...results,
       triggeredSchedulesCount: stickySchedulesCreated,
@@ -2972,6 +3046,8 @@ fastify.post('/api/chore-schedules', async (request, reply) => {
       snoozedUntilResult.value
     ).lastInsertRowid));
     const ids = insertAll(targets.userIds);
+    // A sticky schedule that fires today shows today, not from midnight.
+    spawnStickyChildren(getTodayLocalDateString(), ids.map(Number));
     return targets.batch ? { id: ids[0], ids, success: true } : { id: ids[0], success: true };
   } catch (error) {
     console.error('Error adding schedule:', error);
@@ -3163,6 +3239,13 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       }
     }
 
+    // Made sticky, given a new timing, or shown again: if it now fires
+    // today, today's chore appears at once (issue #256). An open child
+    // already there is left as it is.
+    if (crontab !== undefined || duration !== undefined || visible !== undefined) {
+      spawnStickyChildren(getTodayLocalDateString(), [Number(id)]);
+    }
+
     return { success: true };
   } catch (error) {
     console.error('Error updating schedule:', error);
@@ -3197,24 +3280,31 @@ function withIsoCreatedAt(row) {
 fastify.get('/api/chore-history', async (request, reply) => {
   try {
     const { user_id, date, date_from, date_to } = request.query;
-    let query = 'SELECT * FROM chore_history';
+    // The person's name and the chore a row belongs to come along, so a history
+    // view can show and group them without a lookup per row. chore_id is null
+    // when the schedule is gone; the row's title snapshot remains.
+    let query = `
+      SELECT ch.*, u.username, cs.chore_id
+      FROM chore_history ch
+      LEFT JOIN users u ON u.id = ch.user_id
+      LEFT JOIN chore_schedules cs ON cs.id = ch.chore_schedule_id`;
     const conditions = [];
     const params = [];
 
     if (user_id !== undefined) {
-      conditions.push('user_id = ?');
+      conditions.push('ch.user_id = ?');
       params.push(user_id);
     }
     if (date) {
-      conditions.push('date = ?');
+      conditions.push('ch.date = ?');
       params.push(date);
     }
     if (date_from) {
-      conditions.push('date >= ?');
+      conditions.push('ch.date >= ?');
       params.push(date_from);
     }
     if (date_to) {
-      conditions.push('date <= ?');
+      conditions.push('ch.date <= ?');
       params.push(date_to);
     }
 
@@ -3222,7 +3312,7 @@ fastify.get('/api/chore-history', async (request, reply) => {
       query += ' WHERE ' + conditions.join(' AND ');
     }
 
-    query += ' ORDER BY date DESC, created_at DESC';
+    query += ' ORDER BY ch.date DESC, ch.created_at DESC, ch.id DESC';
 
     const rows = db.prepare(query).all(...params);
     return rows.map(withIsoCreatedAt);
@@ -4166,6 +4256,25 @@ fastify.get('/api/weather', async (request, reply) => {
   }
 });
 
+// The current condition only, for a theme's weather scenes (#247). Answered
+// from any fresh reading of the place, so a display polling it every few
+// minutes costs no upstream calls a weather widget has already made.
+fastify.get('/api/weather/condition', async (request, reply) => {
+  try {
+    const { lat, lon } = request.query || {};
+    const toNumber = (value) => (value === undefined || value === '' ? undefined : Number(value));
+    return await weatherService.getCondition(db, {
+      lat: toNumber(lat),
+      lon: toNumber(lon),
+      demoMode: DEMO_MODE,
+    });
+  } catch (error) {
+    const status = Number.isInteger(error.status) ? error.status : 500;
+    console.error('Error fetching weather condition:', error.message);
+    return reply.status(status).send({ error: error.message || 'Failed to fetch the weather condition.' });
+  }
+});
+
 // Resolve a free-text location to coordinates. Used by the weather widget's
 // settings dialog and by auto dark mode, both of which used to call
 // OpenWeatherMap's geocoder from the browser with the raw API key.
@@ -4293,9 +4402,9 @@ fastify.get('/api/settings', async (request, reply) => {
   try {
     console.log('=== FETCHING SETTINGS ===');
     const rows = selectSettings(parseSettingsKeysParam(request.query?.keys));
-    console.log('Raw settings from database:', rows);
+    // Never log the rows: they hold secrets (WEATHER_API_KEY and the rest of
+    // REDACTED_SETTING_KEYS) that the response itself leaves out.
     const settings = rowsToSettingsObject(rows);
-    console.log('Processed settings object:', settings);
     return settings;
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -4313,9 +4422,9 @@ fastify.post('/api/settings/search', async (request, reply) => {
     // so third-party plugins call it and it stays supported. GET /api/settings
     // with ?keys= is the preferred read for new callers.
     const rows = selectSettings(keys);
-    console.log('Raw settings from database:', rows);
+    // Never log the rows: they hold secrets (WEATHER_API_KEY and the rest of
+    // REDACTED_SETTING_KEYS) that the response itself leaves out.
     const settings = rowsToSettingsObject(rows);
-    console.log('Processed settings object:', settings);
     return settings;
   } catch (error) {
     console.error('Error fetching settings:', error);
@@ -4325,8 +4434,8 @@ fastify.post('/api/settings/search', async (request, reply) => {
 
 fastify.post('/api/settings', async (request, reply) => {
   const { key, value } = request.body;
-  // single log message showing the details of the save:
-  console.log(`=== SAVING SETTING === Key: ${key} - Value: ${value} Value type: ${typeof value} Value length: ${value ? value.length : 'null/undefined'}`);
+  // The key only, never the value: it may be a secret (REDACTED_SETTING_KEYS).
+  console.log(`=== SAVING SETTING === Key: ${key}`);
 
   if (!key || value === undefined) {
     console.log('ERROR: Missing key or value');
@@ -4354,7 +4463,7 @@ fastify.post('/api/settings', async (request, reply) => {
 
     // Verify the setting was saved
     const verification = db.prepare('SELECT key, value FROM settings WHERE key = ?').get(key);
-    console.log('Verification query result:', verification);
+    console.log('Verification query result: saved', !!verification);
 
     // Changing the provider or its credentials invalidates anything cached
     // under the old configuration.
@@ -4844,8 +4953,6 @@ fastify.patch('/api/devices/:deviceName/widget-assignments/layout/bulk', async (
 fastify.post('/api/test-api-key', async (request, reply) => {
   const { apiKey } = request.body;
   console.log('=== TESTING API KEY SAVE ===');
-  console.log('Received API key:', apiKey);
-  console.log('API key type:', typeof apiKey);
   console.log('API key length:', apiKey ? apiKey.length : 'null/undefined');
 
   try {
@@ -4856,7 +4963,7 @@ fastify.post('/api/test-api-key', async (request, reply) => {
 
     // Verify it was saved
     const verification = db.prepare('SELECT key, value FROM settings WHERE key = ?').get('WEATHER_API_KEY');
-    console.log('Verification result:', verification);
+    console.log('Verification result: saved', !!verification);
 
     return {
       success: true,
@@ -4872,9 +4979,9 @@ fastify.post('/api/test-api-key', async (request, reply) => {
 // NEW: Generic CORS Proxy Endpoint
 fastify.get('/api/proxy', async (request, reply) => {
   if (demoBlocked(reply)) return;
+  // Method, host and status only: request headers carry credentials, and a
+  // target's query string or response can carry tokens.
   console.log('=== PROXY REQUEST RECEIVED ===');
-  console.log('Query params:', request.query);
-  console.log('Headers:', request.headers);
 
   const { targetUrl } = request.query;
 
@@ -4882,8 +4989,6 @@ fastify.get('/api/proxy', async (request, reply) => {
     console.log('ERROR: No targetUrl provided');
     return reply.status(400).send({ error: 'targetUrl query parameter is required.' });
   }
-
-  console.log('Target URL requested:', targetUrl);
 
   let whitelist = [];
   try {
@@ -4915,7 +5020,7 @@ fastify.get('/api/proxy', async (request, reply) => {
       return reply.status(403).send({ error: 'Access to this domain is not allowed through the proxy.' });
     }
 
-    console.log(`Proxying request to whitelisted domain: ${targetUrl}`);
+    console.log(`Proxying GET to whitelisted host: ${targetHostname}`);
 
     const proxyHttpsAgent = httpsAgentFor(targetUrl);
 
@@ -4942,11 +5047,8 @@ fastify.get('/api/proxy', async (request, reply) => {
       console.log(`Proxy: ${targetHostname} is a private address; accepting a self-signed certificate.`);
     }
 
-    console.log('Making axios request with config:', axiosConfig);
     const response = await axios.get(targetUrl, axiosConfig);
-    console.log('Axios response received:', response.status, response.statusText);
-    console.log('Response data type:', typeof response.data);
-    console.log('Response data preview:', JSON.stringify(response.data).substring(0, 200) + '...');
+    console.log(`Proxy: ${targetHostname} answered ${response.status}`);
 
     // Forward the content type and the data from the external API
     if (response.headers['content-type']) {
@@ -4971,7 +5073,6 @@ fastify.get('/api/proxy', async (request, reply) => {
       address: error.address,
       port: error.port,
       config: error.config ? {
-        url: error.config.url,
         method: error.config.method,
         timeout: error.config.timeout
       } : 'No config',
@@ -5642,6 +5743,9 @@ fastify.put('/api/connections/homeassistant', async (request, reply) => {
     homeAssistant.saveConfig(db, { url, token, weatherEntity: weather_entity });
     // Provider config changed, so anything cached under the old settings is stale.
     weatherService.clearCache();
+    // Panels' live link starts again with the new address or token.
+    haLive.reset();
+    haPanels.refreshWatched();
     return { success: true, status: homeAssistant.getHomeAssistantStatus(db) };
   } catch (error) {
     console.error('Error saving Home Assistant config:', error);
@@ -5678,6 +5782,8 @@ fastify.delete('/api/connections/homeassistant', async (request, reply) => {
   try {
     homeAssistant.clearConfig(db);
     weatherService.clearCache();
+    haLive.reset();
+    haPanels.refreshWatched();
     return { success: true };
   } catch (error) {
     console.error('Error clearing Home Assistant config:', error);
@@ -6336,15 +6442,20 @@ fastify.get('/api/photo-sources/:sourceId/uploaded/:photoId/file', async (reques
 fastify.post('/api/photo-sources/:sourceId/uploaded', async (request, reply) => {
   if (demoBlocked(reply)) return;
   const { sourceId } = request.params;
+  const added = [];
+  const failed = [];
   try {
     const source = loadHomeGlowPhotoSourceOr404(sourceId, reply);
     if (!source) return;
     const uploadDir = path.join(__dirname, 'uploads', 'homeglow-photos', String(sourceId));
     await fs.mkdir(uploadDir, { recursive: true });
 
-    const parts = request.parts();
-    const added = [];
-    const failed = [];
+    // A photo over the 25 MB limit arrives cut short (`truncated`) and is
+    // reported as failed, and the rest are read on. Left to throw, the reader
+    // raises the limit as soon as it parses that far, which can be while an
+    // earlier photo is still being saved: the error then comes out of the loop
+    // before the large photo is reached, and the whole upload failed (#253).
+    const parts = request.parts({ throwFileSizeLimit: false });
     for await (const part of parts) {
       if (part.type !== 'file') continue;
       if (!part.mimetype || !part.mimetype.startsWith('image/')) {
@@ -6358,6 +6469,10 @@ fastify.post('/api/photo-sources/:sourceId/uploaded', async (request, reply) => 
         const filename = `${safeBase}${ext.toLowerCase()}`;
         const filePath = path.join(uploadDir, filename);
         const buffer = await part.toBuffer();
+        if (part.file.truncated) {
+          failed.push({ name: part.filename, reason: 'Larger than 25 MB' });
+          continue;
+        }
         await fs.writeFile(filePath, buffer);
         const info = db.prepare(
           `INSERT INTO homeglow_photos (source_id, filename, original_name, mime_type, size) VALUES (?, ?, ?, ?, ?)`
@@ -7080,6 +7195,12 @@ const start = async () => {
 
     await fastify.listen({ port: process.env.PORT || 5000, host: '0.0.0.0' });
     console.log(`Server running on port ${process.env.PORT || 5000}`);
+    // Panels on the dashboard: open the live link to Home Assistant.
+    try {
+      haPanels.refreshWatched();
+    } catch (error) {
+      console.warn('Home Assistant panels: could not start the live link:', error.message);
+    }
   } catch (err) {
     console.error(err);
     process.exit(1);

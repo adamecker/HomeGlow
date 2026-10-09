@@ -29,9 +29,21 @@ code, so you know where to look when working on a given domain.
   `<html>`. Gradients and interface colors are configurable in the Admin Panel and
   pushed to CSS variables at runtime.
 - Preferences persist in `localStorage` (`theme`, `themeMode`, `interfaceColors`).
+- **Weather scenes** (issue #247): a theme can list a scene per weather
+  condition (manifest version 4, `weather`). The display shows the scene for
+  the weather at the appearance location (the one Auto mode uses), checked
+  every 10 minutes through `GET /api/weather/condition`, which answers from
+  any fresh reading of the place, so it costs no extra provider calls. Night
+  is each scene's dark look, so on Auto it follows sunset. A missing scene
+  falls back to a related one, then the theme's default. Admin → Look →
+  Appearance shows what the theme would show now and can preview each scene
+  on the display for 10 minutes. The Weather theme itself ships from
+  HomeGlowThemes.
 
 **Code:** theme logic in `app.jsx`, colors in `index.css`,
-`ColorPickerPopover.jsx`, `colorContrast.js`.
+`ColorPickerPopover.jsx`, `colorContrast.js`; weather scenes in
+`utils/weatherScenes.js`, `utils/useWeatherCondition.js`, `resolveTheme` in
+`utils/themes.js`, and `getCondition` in `server/services/weather/index.js`.
 
 ## Chores & the clam reward system
 
@@ -353,6 +365,47 @@ gates in `app.jsx` (sound scheduler + screensaver render), UI in `AdminPanel.jsx
 
 **Code:** `PluginWidgetWrapper.jsx`, backend `/api/widgets*` routes, and
 [`server/widgets/README.md`](../../server/widgets/README.md).
+
+## Home Assistant panels (issue #252)
+
+- **Admin → Dashboard → Home Assistant** builds panels of tiles for Home
+  Assistant devices, with no code: pick devices (searchable, grouped by area),
+  or start a panel from an area in one click; set each tile's label, icon, size
+  (1×1 to 2×2), "view only", "press and hold", whether it shows its state, and
+  "show only when…" another entity is in a given state. Several entities of
+  one kind on one tile work together. A live preview shows the panel in the
+  current theme at three widget sizes.
+- Each panel is a plugin (`ha-<name>.html`), placed on tabs like any other, and
+  stored in the database (`ha_panels`), so it survives upgrades. One template
+  (`server/ha-panels/template.html`) draws every panel from its recipe, so a
+  HomeGlow update improves them all.
+- Tiles by kind: lights (tap; drag to dim), switches, fans (speed), shades
+  (top half opens, bottom closes, drag for position), scenes and scripts, a
+  thermostat (− / + and mode), media players, locks, alarms, vacuums, selects,
+  numbers, camera snapshots, and read-only sensors, people and the sun. The
+  theme's accent, button and meter roles color them; they reflow from a grid
+  to a compact list in small widgets.
+- **The token never leaves the server.** Panels talk only to HomeGlow, which
+  checks every read and press against the panel's own recipe: only its
+  entities, only actions that fit each one, values clamped, 10 presses a second
+  at most. One WebSocket to Home Assistant (`subscribe_entities`) keeps a live
+  copy, so panels polling every 2 seconds cost Home Assistant nothing; REST
+  covers for it when the link is down.
+- **Locks, alarms, garage doors and gates** always need press and hold.
+  Unlocking, disarming and opening a garage door also need the household PIN,
+  unless the display remembers the admin PIN or the household turns PIN
+  protection off in the builder.
+- A display can show panels without operating them: each panel declares an
+  "Operate Home Assistant devices" control for Control Limits. A display set to
+  Wall display hides it too, unless that display is excepted.
+- Panels can be duplicated, copied as text and imported into another HomeGlow
+  (with a step to swap entity ids), and the builder lists what panels did.
+- Hand-written plugins get the same access by declaring `homeAssistant`
+  entities in their manifest (Plugin Development guide, §5a).
+
+**Code:** `HomeAssistantPanels.jsx`, `utils/haPanelBuilder.js`; backend
+`routes/haPanels.js`, `services/haPanels.js` (rules), `services/haLive.js`
+(live link), `ha-panels/template.html`.
 
 ## Admin Panel & PIN
 

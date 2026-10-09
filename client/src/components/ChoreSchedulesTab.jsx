@@ -61,8 +61,7 @@ import {
   validateCrontab,
   formatScheduleInterval,
   computeCrontab,
-  updateScheduleFormHelper,
-  isScheduleFormInvalid
+  updateScheduleFormHelper
 } from '../utils/choreScheduleUtils.js';
 import { compareByKey } from '../utils/choreHelpers.js';
 
@@ -351,7 +350,9 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
   const handleSaveSchedule = async () => {
     const cron = computeCrontab(scheduleForm);
-    const err = scheduleForm.isOneTime ? null : validateCrontab(cron);
+    // A repeating chore needs a schedule: an empty one would be saved as a
+    // one-time chore, without a word (no days ticked, an empty custom field).
+    const err = scheduleForm.isOneTime ? null : (cron ? validateCrontab(cron) : t('chores:schedules.crontabRequired'));
     if (err) { setCrontabError(err); return; }
 
     setSavingSchedule(true);
@@ -621,6 +622,12 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
     return true;
   }), scheduleSortKeys, scheduleSort);
 
+  const currentCrontab = computeCrontab(scheduleForm);
+  const nextOccurrence = getNextOccurrence(currentCrontab);
+  const isOnceCompletedMissingInterval = !scheduleForm.isOneTime
+    && scheduleForm.duration === 'once-completed'
+    && !(Number.isInteger(Number.parseInt(scheduleForm.sleepCount, 10)) && Number.parseInt(scheduleForm.sleepCount, 10) > 0);
+
   const parsedDueDays = Number.parseInt(scheduleForm.due_days, 10);
   const hasInvalidDueDays = !scheduleForm.isOneTime
     && scheduleForm.due_days !== ''
@@ -628,7 +635,10 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
   const isScheduleSaveDisabled = savingSchedule
     || !scheduleForm.chore_id
-    || isScheduleFormInvalid(scheduleForm, crontabError)
+    || (!scheduleForm.isOneTime && !!crontabError)
+    || (!scheduleForm.isOneTime && scheduleForm.scheduleMode === 'custom' && !scheduleForm.customCrontab.trim())
+    || (!scheduleForm.isOneTime && scheduleForm.scheduleMode === 'days' && scheduleForm.selectedDays.length === 0)
+    || isOnceCompletedMissingInterval
     || hasInvalidDueDays;
 
   if (loading) {

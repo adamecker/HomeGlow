@@ -3,13 +3,21 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { freePort } = require('./freePort');
 
 const serverDir = path.resolve(__dirname, '..');
 const tmpDir = path.resolve(__dirname, '.tmp');
 const testDbPath = path.join(tmpDir, `api-endpoints-${process.pid}-${Date.now()}.db`);
 const keepTestArtifacts = process.env.HOMEGLOW_TEST_KEEP_ARTIFACTS === '1';
-const port = 5200 + Math.floor(Math.random() * 300);
-const baseUrl = `http://127.0.0.1:${port}`;
+let port;
+let baseUrl;
+
+// Ask the OS for a free port: a port picked from a fixed range can be one
+// another program holds on 127.0.0.1, and then every request reaches it.
+async function usePort() {
+    port = await freePort();
+    baseUrl = `http://127.0.0.1:${port}`;
+}
 
 let serverProcess;
 let serverLogs = '';
@@ -61,6 +69,7 @@ async function api(pathname, options = {}) {
 }
 
 test.before(async () => {
+    await usePort();
     fs.mkdirSync(tmpDir, { recursive: true });
 
     serverProcess = spawn('node', ['index.js'], {
@@ -1057,4 +1066,33 @@ test('testing an Immich source without an API key says so', async () => {
     // Reported without dialling the server, so an unreachable host cannot mask
     // the real problem.
     assert.doesNotMatch(body.error, /refused|timed out/i);
+});
+
+test('history rows carry the person and the chore, and keep the title once the schedule is gone', async () => {
+    const userId = await newUser('History Hana');
+    const choreId = await newChore('Water the plants');
+    const created = await api('/api/chore-schedules', {
+        method: 'POST',
+        body: JSON.stringify({ chore_id: choreId, user_id: userId, crontab: '0 0 * * *', duration: 'day-of' }),
+    });
+    assert.equal(created.status, 200, JSON.stringify(created.body));
+    const scheduleId = created.body.id ?? created.body.ids?.[0];
+    const done = await api('/api/chores/complete', {
+        method: 'POST',
+        body: JSON.stringify({ chore_schedule_id: scheduleId, user_id: userId, date: '2026-01-05' }),
+    });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+
+    const completionOf = async () => (await api(`/api/chore-history?user_id=${userId}&date_from=2026-01-01`)).body
+        .find((row) => row.kind === 'completion');
+    const row = await completionOf();
+    assert.equal(row.username, 'History Hana');
+    assert.equal(row.chore_id, choreId);
+    assert.equal(row.title, 'Water the plants');
+
+    assert.equal((await api(`/api/chore-schedules/${scheduleId}`, { method: 'DELETE' })).status, 200);
+    const orphan = await completionOf();
+    assert.equal(orphan.chore_id, null);
+    assert.equal(orphan.title, 'Water the plants');
+    assert.equal(orphan.username, 'History Hana');
 });
