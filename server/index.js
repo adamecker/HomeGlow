@@ -256,6 +256,7 @@ const schemaMigrations = [
   { schemaId: 31, migrationPath: './migrations/schema31-removeCalendarMatch', },
   { schemaId: 32, migrationPath: './migrations/schema32-removeSpawn', },
   { schemaId: 33, migrationPath: './migrations/schema33-haPanels', },
+  { schemaId: 34, migrationPath: './migrations/schema34-googleTasksTables', },
 ];
 
 const ALLOWED_SCHEDULE_DURATIONS = new Set(['day-of', 'until-completed', 'once-completed']);
