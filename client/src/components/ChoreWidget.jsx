@@ -638,6 +638,25 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
           user_id: schedule.user_id,
           date: today
         });
+        // Undoing a routine-backed chore also unticks its inline steps, so
+        // the checklist and the chore agree again.
+        if (showRoutineSteps) {
+          const routine = routineForSchedule(routinesData.routines, schedule);
+          if (routine) {
+            const cleared = {
+              ...routinesData.progress,
+              [routine.id]: {
+                ...(routinesData.progress[routine.id] || {}),
+                [today]: { done: [], at: null },
+              },
+            };
+            setRoutinesData((prev) => ({ ...prev, progress: cleared }));
+            await axios.put(
+              `${API_BASE_URL}/api/plugin/v1/storage/${ROUTINES_PLUGIN_ID}/${encodeURIComponent(progressStorageKey(routine.id))}`,
+              cleared[routine.id] || {}
+            ).catch(() => {});
+          }
+        }
       } else {
         await axios.post(`${API_BASE_URL}/api/chores/complete`, {
           chore_schedule_id: schedule.id,

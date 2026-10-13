@@ -60,10 +60,12 @@ export function routineForSchedule(routines, schedule) {
   return null;
 }
 
-/** Resolve a routine's step ids to display names via the library. */
+/** Resolve a routine's step ids to display names via the library.
+ * Library entries carry the display text in `label` (older exports may use
+ * `name`); fall back to the raw id when the step is unknown. */
 export function routineStepNames(routine, library) {
   if (!routine || !Array.isArray(routine.steps)) return [];
-  const byId = new Map((Array.isArray(library) ? library : []).map((s) => [s.id, s.name]));
+  const byId = new Map((Array.isArray(library) ? library : []).map((s) => [s.id, s.label || s.name]));
   return routine.steps.map((id) => ({ id, name: byId.get(id) || String(id) }));
 }
 

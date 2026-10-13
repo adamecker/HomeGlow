@@ -9,9 +9,9 @@ import {
 } from './routineSteps.js';
 
 const library = [
-  { id: 's1', name: 'water' },
-  { id: 's2', name: 'shorts' },
-  { id: 's3', name: 'slides' },
+  { id: 's1', label: 'water' },
+  { id: 's2', label: 'shorts' },
+  { id: 's3', label: 'slides' },
 ];
 const routine = {
   id: 'r1', name: 'Get ready for gymnastics', userId: 1,
@@ -43,12 +43,16 @@ describe('routineForSchedule', () => {
 });
 
 describe('routineStepNames', () => {
-  it('resolves step ids through the library', () => {
+  it('resolves step ids through the library label', () => {
     expect(routineStepNames(routine, library)).toEqual([
       { id: 's1', name: 'water' },
       { id: 's2', name: 'shorts' },
       { id: 's3', name: 'slides' },
     ]);
+  });
+
+  it('accepts the legacy name field too', () => {
+    expect(routineStepNames(routine, [{ id: 's1', name: 'water' }])[0]).toEqual({ id: 's1', name: 'water' });
   });
 
   it('falls back to the raw id for unknown steps', () => {
