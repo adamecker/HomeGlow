@@ -38,8 +38,9 @@ Create a single HTML file:
   <title>My Widget</title>
   <link rel="stylesheet" href="/index.css">
   <style>
+    /* No body background: the dashboard's frame draws it, rounded and at
+       the household's card opacity, and clears the page's own. */
     body {
-      background: var(--card-bg);
       color: var(--text-color);
       font-family: sans-serif;
       margin: 0;
@@ -52,14 +53,11 @@ Create a single HTML file:
   <div id="content">Loading…</div>
   <script>
     document.addEventListener('DOMContentLoaded', () => {
-      // Theme + transparency come in on the URL.
+      // Theme comes in on the URL.
       const params = new URLSearchParams(window.location.search);
       const theme = params.get('theme');
       if (theme === 'dark' || theme === 'light') {
         document.documentElement.setAttribute('data-theme', theme);
-      }
-      if (params.get('transparent') === 'true') {
-        document.body.style.background = 'transparent';
       }
 
       // Widgets are same-origin: call any HomeGlow API directly.
@@ -163,6 +161,7 @@ Embed a manifest as a JSON script block anywhere in your HTML (conventionally in
   "manifestVersion": 1,
   "id": "my-plugin",
   "name": "My Plugin",
+  "version": "1.0.0",
   "description": "One sentence on what this does, shown in the plugin list.",
   "author": "Your name or GitHub handle",
   "category": "family-hub",
@@ -193,6 +192,7 @@ serving your widget, and the SDK picks it up — you never pass your own id.
 | `name` | — | Display name shown in the Admin Panel (falls back to the filename). |
 | `description` | — | One sentence on what the plugin does, shown under its name in the Admin Panel and in the browse list. Max 300 characters — it is a card subtitle, not a README. Worth writing: without it the list shows only a filename. |
 | `author` | — | Who wrote the plugin, shown as "by …" beside its name in the Admin Panel and the browse list. Max 80 characters. Without it no author is shown, except on the plugins that shipped before v1.6, which are credited to HomeGlow. |
+| `version` | — | The plugin's version, shown beside its name in the Admin Panel and the plugin list: `major.minor.patch` by convention, any string up to 32 characters accepted. Raise it with every change (`1.0.1` for a fix, `1.1.0` for something new, `2.0.0` for a change that drops a setting or needs a newer HomeGlow). The list says **Up to date** or **Update to …** by comparing the installed file with the repository's itself (its git sha), so an update shows even when the version wasn't raised; the version tells people what they are getting. The plugins in HomeGlowPlugins all started at `1.0.0` (issue #273). |
 | `category` | — | The heading the plugin store lists it under: `clock-calendar`, `news-weather`, `chores-rewards`, `family-hub`, `meals`, `household`, `health` or `games`. Without one, or with a value not on that list, it is listed under **Other**. |
 | `apiVersion` | — | `"v1"` — the API contract you target. |
 | `storage` | — | `true` to use the storage API. Without it, storage calls are 403. |
@@ -421,6 +421,27 @@ Three things worth knowing:
 - **It is a hint, not a write.** The host only refetches. It grants no
   permission you did not already have by calling the API.
 
+### Asking for a celebration
+
+When something in your plugin is worth marking (a child finished a routine, a
+poll closed), ask the board for its celebration, the same one the chore widget
+plays when someone finishes their day:
+
+```js
+if (typeof HomeGlow.celebrate === 'function') HomeGlow.celebrate();
+```
+
+The board throws the active theme's confetti across the whole screen, and the
+theme's cast if it has one (a few of its own pictures crossing once). It is
+the household's to control, not yours:
+
+- **It may do nothing.** HomeGlow plays at most one per plugin every 15
+  seconds, none while one is already playing, and none when the household has
+  turned celebrations off in Admin. Nothing plays for people who ask their
+  system for reduced motion.
+- **Check for it first.** A HomeGlow older than the call has no `celebrate`.
+- **Keep it for real moments.** Every tick of a checkbox is not one.
+
 ## 5a. Home Assistant — read and operate devices
 
 Admin → Dashboard → Home Assistant builds panels without code. A plugin that
@@ -625,7 +646,7 @@ into a shared *give* pool — even when no dashboard is showing the widget.
   </script>
 
   <style>
-    body { background: var(--card-bg); color: var(--text-color);
+    body { color: var(--text-color);
            font-family: sans-serif; margin: 0; padding: 16px; }
     .pool { font-size: 2em; font-weight: bold; color: var(--accent); }
     .goal-hit { animation: pulse 1s infinite alternate; }
@@ -659,9 +680,6 @@ into a shared *give* pool — even when no dashboard is showing the widget.
       const theme = params.get('theme');
       if (theme === 'dark' || theme === 'light') {
         document.documentElement.setAttribute('data-theme', theme);
-      }
-      if (params.get('transparent') === 'true') {
-        document.body.style.background = 'transparent';
       }
 
       refresh();
