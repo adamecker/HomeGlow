@@ -20,13 +20,24 @@ const routine = {
 
 describe('routineForSchedule', () => {
   it('matches by scheduleId', () => {
-    expect(routineForSchedule([routine], { id: 126 })).toBe(routine);
+    expect(routineForSchedule([routine], { id: 126, chore_id: 126 })).toBe(routine);
+  });
+
+  it('falls back to choreId when scheduleId is missing', () => {
+    const legacy = { ...routine, scheduleId: undefined };
+    expect(routineForSchedule([legacy], { id: 999, chore_id: 126 })).toBe(legacy);
+  });
+
+  it('prefers scheduleId over choreId fallback', () => {
+    const legacy = { ...routine, id: 'legacy', scheduleId: undefined, choreId: 126 };
+    const current = { ...routine, id: 'current', scheduleId: 999, choreId: 999 };
+    expect(routineForSchedule([legacy, current], { id: 999, chore_id: 126 }).id).toBe('current');
   });
 
   it('returns null when nothing matches', () => {
-    expect(routineForSchedule([routine], { id: 999 })).toBeNull();
-    expect(routineForSchedule([], { id: 126 })).toBeNull();
-    expect(routineForSchedule(null, { id: 126 })).toBeNull();
+    expect(routineForSchedule([routine], { id: 999, chore_id: 999 })).toBeNull();
+    expect(routineForSchedule([], { id: 126, chore_id: 126 })).toBeNull();
+    expect(routineForSchedule(null, { id: 126, chore_id: 126 })).toBeNull();
     expect(routineForSchedule([routine], null)).toBeNull();
   });
 });
@@ -103,7 +114,8 @@ describe('toggleRoutineStep', () => {
 describe('fetchRoutinesData', () => {
   it('fetches routines, library, keys and progress', async () => {
     const httpGet = vi.fn(async (url) => {
-      if (url === 'http://x/api/plugin/v1/storage/routines') return ['routines', 'library', 'progress:r1'];
+      if (url === 'http://x/api/plugin/v1/storage/routines')
+        return { routines: [routine], library, 'progress:r1': { '2026-10-12': { done: ['s1'], at: null } } };
       if (url.endsWith('/routines')) return [routine];
       if (url.endsWith('/library')) return library;
       if (url.includes('progress%3Ar1')) return { '2026-10-12': { done: ['s1'], at: null } };

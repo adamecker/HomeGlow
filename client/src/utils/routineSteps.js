@@ -19,13 +19,13 @@ export async function fetchRoutinesData(apiBase, httpGet) {
     return r.json();
   }));
   const base = `${apiBase}/api/plugin/v1/storage/${ROUTINES_PLUGIN_ID}`;
-  const [routines, library, keys] = await Promise.all([
+  const [routines, library, allValues] = await Promise.all([
     get(`${base}/routines`).catch(() => []),
     get(`${base}/library`).catch(() => []),
-    // Key listing is the plugin-scoped index; fall back to empty.
-    get(base).catch(() => []),
+    // The plugin-scoped index returns { key: value }; fall back to empty.
+    get(base).catch(() => ({})),
   ]);
-  const progressKeys = (Array.isArray(keys) ? keys : [])
+  const progressKeys = Object.keys(allValues || {})
     .filter((k) => typeof k === 'string' && k.startsWith('progress:'));
   const progressEntries = await Promise.all(
     progressKeys.map((k) => get(`${base}/${encodeURIComponent(k)}`)
@@ -39,12 +39,25 @@ export async function fetchRoutinesData(apiBase, httpGet) {
   };
 }
 
-/** Find the routine backing a chore schedule, if any. */
+/** Find the routine backing a chore schedule, if any.
+ * Matches by scheduleId; falls back to choreId for routines created before
+ * scheduleId was stored. */
 export function routineForSchedule(routines, schedule) {
   if (!Array.isArray(routines) || !schedule) return null;
   const sid = Number(schedule.id);
-  if (!Number.isFinite(sid)) return null;
-  return routines.find((r) => Number(r.scheduleId) === sid) || null;
+  const cid = Number(schedule.chore_id);
+  // Prefer an exact scheduleId match; fall back to choreId for routines
+  // created before scheduleId was stored.
+  if (Number.isFinite(sid)) {
+    const bySchedule = routines.find((r) => Number(r.scheduleId) === sid);
+    if (bySchedule) return bySchedule;
+  }
+  if (Number.isFinite(cid)) {
+    const byChore = routines.find((r) =>
+      (r.scheduleId === undefined || r.scheduleId === null) && Number(r.choreId) === cid);
+    if (byChore) return byChore;
+  }
+  return null;
 }
 
 /** Resolve a routine's step ids to display names via the library. */
