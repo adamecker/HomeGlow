@@ -172,9 +172,7 @@
     "helper": "Elige quién aparece como columna en esta pantalla. Las demás pantallas seguirán viendo a todos.",
     "noUsers": "Aún no hay personas para mostrar.",
     "allHiddenTitle": "No se muestra a nadie en esta pantalla",
-    "allHiddenBody": "Abre los ajustes del widget de tareas (icono del engranaje) y vuelve a activar a alguien.",
-    "showRoutineSteps": "Mostrar listas de rutinas",
-    "showRoutineStepsHelper": "Muestra las listas del plugin Rutinas dentro de las tarjetas de tareas correspondientes, para no necesitar el panel de Rutinas en esta pantalla."
+    "allHiddenBody": "Abre los ajustes del widget de tareas (icono del engranaje) y vuelve a activar a alguien."
   },
   "schedules": {
     "definitionsHeading": "Definiciones de tareas",
