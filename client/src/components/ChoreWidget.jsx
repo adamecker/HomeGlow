@@ -44,15 +44,6 @@ import { filterVisibleUsers, toggleHiddenUserId, pruneHiddenUserIds } from '../u
 import { isControlHidden } from '../utils/displayControls.js';
 import { subscribePluginEvents } from '../utils/pluginEventBridge.js';
 import { subscribePluginDataChanged } from '../utils/pluginDataBridge.js';
-import {
-  fetchRoutinesData,
-  routineForSchedule,
-  routineStepNames,
-  doneStepIds,
-  toggleRoutineStep,
-  progressStorageKey,
-  ROUTINES_PLUGIN_ID,
-} from '../utils/routineSteps.js';
 import { playSound, soundUrl } from '../utils/choreSound.js';
 import { formatTime } from '../utils/dateUtils.js';
 import PrizeCelebration from './PrizeCelebration.jsx';
@@ -66,7 +57,6 @@ import { shouldPersistSettings } from '../utils/widgetSettingsPersist';
 // stored settings, so "never saved" and "saved the defaults" compare equal.
 const DEFAULT_SHOW_BONUS_CHORES = true;
 const DEFAULT_SOUND_ENABLED = true;
-const DEFAULT_SHOW_ROUTINE_STEPS = false;
 // Frozen: it is shared by every instance's initial state and by the
 // no-stored-settings snapshot, so an in-place mutation would corrupt both.
 const DEFAULT_HIDDEN_USER_IDS = Object.freeze([]);
@@ -108,9 +98,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
   // A routine's card (Family → Routines) shows its steps; keyed by schedule id.
   const { routines: routineDays, reload: reloadRoutines, toggleStep: toggleRoutineStep } = useRoutinesToday();
   const [soundEnabled, setSoundEnabled] = useState(DEFAULT_SOUND_ENABLED);
-  const [showRoutineSteps, setShowRoutineSteps] = useState(DEFAULT_SHOW_ROUTINE_STEPS);
-  // Routines-plugin data for inline checklists: { routines, library, progress }.
-  const [routinesData, setRoutinesData] = useState({ routines: [], library: [], progress: {} });
   // Per-device: which real users this display hides. Bonus pseudo-user (id 0)
   // is not a real user and is not offered in the selector — the "Bonus Chores"
   // column already has its own toggle.
@@ -199,9 +186,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
           soundEnabled: choreSettings && typeof choreSettings.soundEnabled === 'boolean'
             ? choreSettings.soundEnabled
             : DEFAULT_SOUND_ENABLED,
-          showRoutineSteps: choreSettings && typeof choreSettings.showRoutineSteps === 'boolean'
-            ? choreSettings.showRoutineSteps
-            : DEFAULT_SHOW_ROUTINE_STEPS,
           // Coerce here so a JSON-round-tripped string id still matches later.
           hiddenUserIds: choreSettings && Array.isArray(choreSettings.hiddenUserIds)
             ? choreSettings.hiddenUserIds.map((id) => Number(id)).filter((id) => Number.isFinite(id))
@@ -209,7 +193,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
         };
         setShowBonusChores(adopted.showBonusChores);
         setSoundEnabled(adopted.soundEnabled);
-        setShowRoutineSteps(adopted.showRoutineSteps);
         setHiddenUserIds(adopted.hiddenUserIds);
       } catch (error) {
         console.error('Error loading chore widget settings:', error);
@@ -239,7 +222,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
       return;
     }
 
-    const current = { showBonusChores, soundEnabled, showRoutineSteps, hiddenUserIds };
+    const current = { showBonusChores, soundEnabled, hiddenUserIds };
     // The load itself is not an edit. Without this the effect writes back what
     // it just read on every mount — and on every tab change that remounts the
     // widget, which on a rotating display is a write a minute.
@@ -259,7 +242,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
     }, 250);
 
     return () => clearTimeout(timeoutId);
-  }, [API_DEVICE_URL, deviceSettingsLoaded, showBonusChores, soundEnabled, showRoutineSteps, hiddenUserIds]);
+  }, [API_DEVICE_URL, deviceSettingsLoaded, showBonusChores, soundEnabled, hiddenUserIds]);
 
   useEffect(() => {
     const onUsersUpdated = () => {
@@ -397,58 +380,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
     } catch (error) {
       console.error('Error fetching data:', error);
       setLoading(false);
-    }
-  };
-
-  // Routines-plugin inline checklists. Fetched only when the display opts in;
-  // the plugin owns this storage and polls it every minute, so a tick here
-  // shows up there (and vice versa) without any extra wiring.
-  const fetchRoutinesInlineData = useCallback(async () => {
-    try {
-      const data = await fetchRoutinesData(API_BASE_URL, async (url) => {
-        const res = await axios.get(url);
-        return res.data;
-      });
-      setRoutinesData(data);
-    } catch (error) {
-      console.error('Error fetching routines data:', error);
-    }
-  }, [API_BASE_URL]);
-
-  useEffect(() => {
-    if (!showRoutineSteps) {
-      setRoutinesData({ routines: [], library: [], progress: {} });
-      return;
-    }
-    void fetchRoutinesInlineData();
-  }, [showRoutineSteps, fetchRoutinesInlineData, refreshNonce]);
-
-  // Toggle one routine step from inside a chore card. Mirrors the Routines
-  // plugin's own toggle: progress goes to the plugin's storage keys, and
-  // ticking the last step completes the underlying chore.
-  const toggleInlineRoutineStep = async (schedule, routine, stepId) => {
-    const today = getTodayDateString();
-    const { progress, allDone, wasAllDone } = toggleRoutineStep(
-      routinesData.progress, routine, stepId, today, new Date().toISOString()
-    );
-    setRoutinesData((prev) => ({ ...prev, progress }));
-    try {
-      await axios.put(
-        `${API_BASE_URL}/api/plugin/v1/storage/${ROUTINES_PLUGIN_ID}/${encodeURIComponent(progressStorageKey(routine.id))}`,
-        progress[routine.id] || {}
-      );
-      if (allDone && !wasAllDone && !schedule.completed) {
-        await axios.post(`${API_BASE_URL}/api/chores/complete`, {
-          chore_schedule_id: schedule.id,
-          user_id: schedule.user_id,
-          date: today,
-        });
-        await fetchData();
-      }
-    } catch (error) {
-      console.error('Error toggling routine step:', error);
-      // Roll back the optimistic update on failure.
-      void fetchRoutinesInlineData();
     }
   };
 
@@ -643,25 +574,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
           user_id: schedule.user_id,
           date: today
         });
-        // Undoing a routine-backed chore also unticks its inline steps, so
-        // the checklist and the chore agree again.
-        if (showRoutineSteps) {
-          const routine = routineForSchedule(routinesData.routines, schedule);
-          if (routine) {
-            const cleared = {
-              ...routinesData.progress,
-              [routine.id]: {
-                ...(routinesData.progress[routine.id] || {}),
-                [today]: { done: [], at: null },
-              },
-            };
-            setRoutinesData((prev) => ({ ...prev, progress: cleared }));
-            await axios.put(
-              `${API_BASE_URL}/api/plugin/v1/storage/${ROUTINES_PLUGIN_ID}/${encodeURIComponent(progressStorageKey(routine.id))}`,
-              cleared[routine.id] || {}
-            ).catch(() => {});
-          }
-        }
       } else {
         await axios.post(`${API_BASE_URL}/api/chores/complete`, {
           chore_schedule_id: schedule.id,
@@ -2014,20 +1926,6 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
             </Typography>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
               {t('chores:visibility.helper')}
-            </Typography>
-            <FormControlLabel
-              control={
-                <Switch
-                  size="small"
-                  checked={showRoutineSteps}
-                  onChange={() => setShowRoutineSteps((prev) => !prev)}
-                />
-              }
-              label={t('chores:visibility.showRoutineSteps')}
-              sx={{ mb: 1 }}
-            />
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-              {t('chores:visibility.showRoutineStepsHelper')}
             </Typography>
             {users.length === 0 ? (
               <Typography variant="body2" color="text.secondary">
