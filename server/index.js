@@ -2058,11 +2058,30 @@ fastify.post('/api/widgets/github/install', async (request, reply) => {
     const sanitizedFilename = filename.replace(/[^a-zA-Z0-9-._]/g, '_');
     const content = typeof response.data === 'string' ? response.data : String(response.data);
 
+    // If this plugin ID is already installed under a different filename
+    // (e.g. the store renamed the file), update the existing row in place
+    // instead of failing with a conflict. The filename is the key widget
+    // assignments reference, so keeping it avoids breaking the dashboard.
+    let effectiveFilename = sanitizedFilename;
+    try {
+      const { manifest } = extractPluginManifest(content);
+      const pluginId = manifest && manifest.id;
+      if (pluginId) {
+        const existing = db.prepare('SELECT filename FROM plugins WHERE plugin_id = ?').get(pluginId);
+        if (existing && existing.filename !== sanitizedFilename) {
+          console.log(`Plugin ${pluginId} already installed as ${existing.filename}; updating in place.`);
+          effectiveFilename = existing.filename;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not check for existing plugin ID:', e.message);
+    }
+
     // Reinstalling refreshes the content in place; provenance is kept so a
     // future "update available" check knows where the plugin came from.
     const result = installPluginRow({
-      filename: sanitizedFilename,
-      fallbackName: name || sanitizedFilename.replace('.html', ''),
+      filename: effectiveFilename,
+      fallbackName: name || effectiveFilename.replace('.html', ''),
       content,
       source: 'github',
       originalUrl: download_url,
