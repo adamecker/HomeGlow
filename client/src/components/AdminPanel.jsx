@@ -84,6 +84,8 @@ import { fetchPinRemembered, setPinRemembered, forgetPinOnAllDevices, shouldProm
 import PinModal from './PinModal';
 import ChoreSchedulesTab from './ChoreSchedulesTab';
 import ChoreHistoryTab from './ChoreHistoryTab';
+import { DeviceNotificationsCard, DeviceNotificationStatus } from './DeviceNotifications';
+import { notificationsColumnShown } from '../utils/pushNotifications.js';
 import RoutinesTab from './RoutinesTab';
 import TabIconModal from './TabIconModal';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
@@ -331,6 +333,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   const [devices, setDevices] = useState([]);
   const [copyDeviceDialog, setCopyDeviceDialog] = useState({ open: false, device: null });
   const [deleteDeviceDialog, setDeleteDeviceDialog] = useState({ open: false, device: null });
+  const showNotifications = notificationsColumnShown(devices);
   const [renameDeviceDialog, setRenameDeviceDialog] = useState({
     open: false,
     currentName: '',
@@ -2965,6 +2968,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   </Box>
                 </Box>
 
+                <DeviceNotificationsCard deviceName={currentDeviceName} onChanged={fetchDevices} />
+
                 <TableContainer component={Paper}>
                   <Table sx={stackableTableSx}>
                     <TableHead>
@@ -2972,6 +2977,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                         <TableCell>{t('common:labels.name')}</TableCell>
                         <TableCell>{t('admin:devices.lastUpdated')}</TableCell>
                         <TableCell>{t('admin:subTabs.widgets')}</TableCell>
+                        {showNotifications && <TableCell>{t('admin:devices.notifications.column')}</TableCell>}
                         <TableCell width={120}>{t('common:labels.actions')}</TableCell>
                       </TableRow>
                     </TableHead>
@@ -2994,6 +3000,11 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                             <TableCell data-label={t('admin:subTabs.widgets')}>
                               <Chip label={Number(device.widgets) || 0} size="small" />
                             </TableCell>
+                            {showNotifications && (
+                              <TableCell data-label={t('admin:devices.notifications.column')}>
+                                <DeviceNotificationStatus device={device} onChanged={fetchDevices} />
+                              </TableCell>
+                            )}
                             <TableCell>
                               {isCurrent ? (
                                 <IconButton
