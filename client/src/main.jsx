@@ -6,10 +6,15 @@ import { initTimezone, watchServerTimezone } from './utils/timezone.js';
 import { initI18n, getStoredLanguage } from './i18n/index.js';
 import { API_BASE_URL } from './utils/apiConfig.js';
 import { installStaleBuildReload } from './utils/staleBuild.js';
+import { initDisplayDim } from './utils/displayDim.js';
 
 // A display open across an update reloads into the new build the first time
 // it fails to load a part the update removed.
 installStaleBuildReload(window, { base: import.meta.env.BASE_URL });
+
+// Wall kiosk panels can be dimmed below the hardware backlight floor via
+// ?dim=0.6 in the URL or localStorage 'hg-dim' (see utils/displayDim.js).
+initDisplayDim();
 
 // A display that has never chosen a language starts in the household default,
 // if an admin set one; after that the device's own choice always wins. Failing
