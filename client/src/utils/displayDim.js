@@ -66,6 +66,10 @@ function resolveConfig() {
 function render() {
   const el = document.documentElement;
   el.style.transition = 'filter 0.6s ease';
+  // Scrollbars are composited by Chrome outside the filtered layer and
+  // would stay full-brightness (a white strip at the edge); hide them
+  // while dimmed via the hg-dimmed class styled in ensureStyle().
+  el.classList.toggle('hg-dimmed', dimmed && target != null);
   if (dimmed && target != null) {
     el.style.filter = `brightness(${target})`;
     el.style.backgroundColor = '#000';
@@ -75,6 +79,16 @@ function render() {
     el.style.backgroundColor = '';
     if (document.body) document.body.style.backgroundColor = '';
   }
+}
+
+function ensureStyle() {
+  if (document.getElementById('hg-dim-style')) return;
+  const style = document.createElement('style');
+  style.id = 'hg-dim-style';
+  style.textContent =
+    'html.hg-dimmed, html.hg-dimmed * { scrollbar-width: none !important; }' +
+    'html.hg-dimmed::-webkit-scrollbar, html.hg-dimmed *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }';
+  document.head.appendChild(style);
 }
 
 function setDimmed(next) {
@@ -97,6 +111,7 @@ export function applyDim(v) {
 
 export function initDisplayDim() {
   resolveConfig();
+  ensureStyle();
   window.hgSetDim = (v) => applyDim(v == null ? null : v);
   if (target == null) return;
   for (const ev of ['pointerdown', 'touchstart', 'keydown', 'wheel']) {
