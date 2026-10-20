@@ -25,6 +25,7 @@ let target = null;
 let idleAfterMs = DEFAULT_AFTER_S * 1000;
 let dimmed = false;
 let lastActivity = Date.now();
+let shield = null;
 
 function stored(key) {
   try {
@@ -70,6 +71,7 @@ function render() {
   // would stay full-brightness (a white strip at the edge); hide them
   // while dimmed via the hg-dimmed class styled in ensureStyle().
   el.classList.toggle('hg-dimmed', dimmed && target != null);
+  if (shield) shield.style.display = dimmed && target != null ? 'block' : 'none';
   if (dimmed && target != null) {
     el.style.filter = `brightness(${target})`;
     el.style.backgroundColor = '#000';
@@ -89,6 +91,23 @@ function ensureStyle() {
     'html.hg-dimmed, html.hg-dimmed * { scrollbar-width: none !important; }' +
     'html.hg-dimmed::-webkit-scrollbar, html.hg-dimmed *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }';
   document.head.appendChild(style);
+}
+
+// Plugin widgets render in iframes, whose pointer events never reach this
+// document — a wake listener here is blind to taps/scrolls inside plugins.
+// While dimmed, a transparent shield above everything (iframes included)
+// catches the first interaction anywhere and wakes the panel; the wake
+// gesture is consumed, like a screensaver dismiss.
+function ensureShield() {
+  if (shield) return;
+  shield = document.createElement('div');
+  shield.id = 'hg-dim-shield';
+  shield.style.cssText =
+    'position:fixed;inset:0;z-index:2147483647;background:transparent;display:none;touch-action:none;';
+  for (const ev of ['pointerdown', 'touchstart', 'wheel']) {
+    shield.addEventListener(ev, poke, { passive: true });
+  }
+  document.body.appendChild(shield);
 }
 
 function setDimmed(next) {
@@ -112,6 +131,7 @@ export function applyDim(v) {
 export function initDisplayDim() {
   resolveConfig();
   ensureStyle();
+  ensureShield();
   window.hgSetDim = (v) => applyDim(v == null ? null : v);
   if (target == null) return;
   for (const ev of ['pointerdown', 'touchstart', 'keydown', 'wheel']) {
