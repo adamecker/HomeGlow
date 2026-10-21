@@ -7357,6 +7357,7 @@ const start = async () => {
       console.warn('================================================================');
     }
 
+    fastify.register(require("./routes/driveBackup"), { db });
     await fastify.listen({ port: process.env.PORT || 5000, host: '0.0.0.0' });
     console.log(`Server running on port ${process.env.PORT || 5000}`);
     // Panels on the dashboard: open the live link to Home Assistant.
