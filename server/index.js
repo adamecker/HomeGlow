@@ -186,6 +186,7 @@ const { httpsAgentFor, isCertificateVerificationSkipped } = require('./utils/out
 const { createUpdateChecker } = require('./services/updateCheck');
 const immichPhotos = require('./services/immichPhotos');
 const { PLUGIN_AUTHOR_MAX_LENGTH, resolvePluginAuthor } = require('./utils/pluginAuthor');
+const { listPluginsFromTree } = require('./utils/pluginStoreListing');
 const { PLUGIN_FRAME_TOUCH_SCRIPT } = require('./utils/pluginFrameTouch');
 const { sqliteUtcToIso, sqliteUtcToMs } = require('./utils/sqliteTime');
 const {
@@ -926,6 +927,12 @@ function extractPluginManifest(htmlContent) {
   }
   if (manifest.storage !== undefined && typeof manifest.storage !== 'boolean') {
     errors.push('storage must be a boolean.');
+  }
+  // false keeps the plugin from being expanded to half or the whole page on
+  // a display that expands widgets (client/src/utils/widgetExpand.js), for a
+  // plugin whose own double-tap or drag would fight with it.
+  if (manifest.expand !== undefined && typeof manifest.expand !== 'boolean') {
+    errors.push('expand must be a boolean.');
   }
   // Home Assistant entities the plugin may read and operate through
   // /api/plugin/v1/ha (issue #252), under the same rules as a built panel.
@@ -1865,6 +1872,7 @@ async function fetchRemotePluginMetadata(downloadUrl, sha, filename) {
     title: null,
     category: null,
     version: null,
+    storeNotice: false,
     author: resolvePluginAuthor({ manifest: null, filename }),
   };
   try {
@@ -1887,6 +1895,9 @@ async function fetchRemotePluginMetadata(downloadUrl, sha, filename) {
         title: title || null,
         category: category || null,
         version: typeof manifest.version === 'string' && manifest.version.trim() ? manifest.version.trim() : null,
+        // A file only an older HomeGlow should list: "update HomeGlow to see
+        // the plugins", left where those versions still look.
+        storeNotice: manifest.storeNotice === true,
         author: resolvePluginAuthor({ manifest, filename }),
       };
     }
@@ -1898,32 +1909,10 @@ async function fetchRemotePluginMetadata(downloadUrl, sha, filename) {
   return result;
 }
 
-// A preview image is a sibling file rather than something embedded in the
-// plugin: "chore-metrics.png" beside "chore-metrics.html".
-//
-// Deliberately not a manifest field. An older HomeGlow returns the whole
-// manifest in GET /api/widgets, which the dashboard fetches on every boot, so a
-// base64 image in there would be downloaded by every display on every page load
-// on any install that has not upgraded. A sibling file is invisible to those
-// versions and costs nothing extra here, because the repository listing already
-// returns every file in the directory.
-const PLUGIN_PREVIEW_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp'];
-
-function findPreviewUrl(entries, htmlFilename) {
-  const stem = htmlFilename.replace(/.html$/i, '').toLowerCase();
-  const match = entries.find((entry) => {
-    if (entry.type !== 'file') return false;
-    const lower = entry.name.toLowerCase();
-    const dot = lower.lastIndexOf('.');
-    if (dot < 0) return false;
-    return lower.slice(0, dot) === stem && PLUGIN_PREVIEW_EXTENSIONS.includes(lower.slice(dot));
-  });
-  return match ? match.download_url : null;
-}
-
 // The list is read for anyone opening Admin → Plugins (issue #273), and
-// GitHub allows an unsigned server 60 calls an hour, a few per listing: kept
-// ten minutes. Refresh (?refresh=1) reads it afresh.
+// GitHub allows an unsigned server 60 calls an hour, two per listing: kept
+// ten minutes. Refresh (?refresh=1) reads it afresh. What counts as a plugin,
+// and its preview image, is utils/pluginStoreListing.js.
 const PLUGIN_STORE_TTL_MS = 10 * 60 * 1000;
 let pluginStoreListing = null; // { at, widgets }
 
@@ -1949,89 +1938,32 @@ fastify.get('/api/widgets/github', async (request, reply) => {
     if (typeof ref !== 'string' || !/^[0-9a-f]{40}$/.test(ref)) throw new Error('GitHub gave no commit for HEAD');
     const pinned = (filePath) => `https://raw.githubusercontent.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/${ref}/${filePath.split('/').map(encodeURIComponent).join('/')}`;
 
-    // Get repository contents
-    const repoUrl = `${GITHUB_API_BASE}/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/contents?ref=${ref}`;
-    const response = await axios.get(repoUrl, {
-      headers: {
-        'Accept': 'application/vnd.github.v3+json',
-        'User-Agent': 'HomeGlow-Server/1.0'
-      },
+    // The whole repository in one call, so plugins can sit in folders
+    // (household/Vacuum/Vacuum.html) without a call per folder.
+    const { data: tree } = await axios.get(`${GITHUB_API_BASE}/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/git/trees/${ref}?recursive=1`, {
+      headers: { 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'HomeGlow-Server/1.0' },
       timeout: 10000
     });
-
-    // Filter for HTML files and directories
-    const items = response.data.filter(item =>
-      item.type === 'file' && item.name.endsWith('.html') ||
-      item.type === 'dir'
-    );
-
-    const widgets = [];
-
-    for (const item of items) {
-      if (item.type === 'file' && item.name.endsWith('.html')) {
-        // Direct HTML file in root
-        widgets.push({
-          name: item.name.replace('.html', ''),
-          filename: item.name,
-          // Filled in below from each plugin's own manifest. Null rather than a
-          // synthesised string: a plugin with no manifest has no description,
-          // and saying so is more useful than inventing one.
-          description: null,
-          previewUrl: findPreviewUrl(response.data, item.name),
-          download_url: pinned(item.path),
-          sha: item.sha,
-          path: item.path,
-          size: item.size,
-          type: 'file'
-        });
-      } else if (item.type === 'dir') {
-        // Check if directory contains HTML files
-        try {
-          const dirUrl = `${GITHUB_API_BASE}/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/contents/${item.path}?ref=${ref}`;
-          const dirResponse = await axios.get(dirUrl, {
-            headers: {
-              'Accept': 'application/vnd.github.v3+json',
-              'User-Agent': 'HomeGlow-Server/1.0'
-            },
-            timeout: 5000
-          });
-
-          const htmlFiles = dirResponse.data.filter(file =>
-            file.type === 'file' && file.name.endsWith('.html')
-          );
-
-          for (const htmlFile of htmlFiles) {
-            widgets.push({
-              name: `${item.name}/${htmlFile.name.replace('.html', '')}`,
-              filename: htmlFile.name,
-              description: null,
-              previewUrl: findPreviewUrl(dirResponse.data, htmlFile.name),
-              download_url: pinned(htmlFile.path),
-              sha: htmlFile.sha,
-              path: htmlFile.path,
-              size: htmlFile.size,
-              type: 'file',
-              folder: item.name
-            });
-          }
-        } catch (dirError) {
-          console.warn(`Could not read directory ${item.name}:`, dirError.message);
-        }
-      }
-    }
+    if (tree?.truncated) console.warn('The plugin repository tree was truncated by GitHub; listing what came back.');
+    const listed = listPluginsFromTree(tree?.tree, pinned);
 
     // Read each plugin's manifest for its real description. allSettled so one
     // unreadable file cannot fail the whole listing — it just lists without a
     // description. Cached by sha, so this is a one-time cost per plugin version.
-    await Promise.allSettled(widgets.map(async (widget) => {
+    await Promise.allSettled(listed.map(async (widget) => {
       const meta = await fetchRemotePluginMetadata(widget.download_url, widget.sha, widget.filename);
       widget.description = meta.description;
       widget.author = meta.author;
       widget.title = meta.title;
       widget.category = meta.category;
       widget.version = meta.version;
+      widget.storeNotice = meta.storeNotice;
       if (meta.pluginId) widget.pluginId = meta.pluginId;
     }));
+    // A notice kept at the root for older HomeGlow ("update to see the
+    // plugins") is not a plugin to offer here.
+    const widgets = listed.filter((widget) => !widget.storeNotice);
+    widgets.forEach((widget) => { delete widget.storeNotice; });
 
     console.log(`Found ${widgets.length} widgets in GitHub repository`);
     pluginStoreListing = { at: Date.now(), widgets };
@@ -3549,8 +3481,16 @@ fastify.post('/api/chore-history', async (request, reply) => {
     if (!user_id || !date) {
       return reply.status(400).send({ error: 'user_id and date are required' });
     }
+    if (!normalizeDueDate(date).valid) {
+      return reply.status(400).send({ error: 'date must be a real YYYY-MM-DD date' });
+    }
     if (kind !== undefined && !CHORE_HISTORY_KINDS.has(kind)) {
       return reply.status(400).send({ error: `kind must be one of: ${[...CHORE_HISTORY_KINDS].join(', ')}` });
+    }
+    // The daily bonus is the server's to award, once per person and day
+    // (awardDailyRegularBonusIfDue); a posted one would stack on top.
+    if (kind === 'daily_bonus') {
+      return reply.status(400).send({ error: 'daily_bonus is awarded by the server, not posted' });
     }
     const rowKind = kind || (chore_schedule_id ? 'completion' : 'adjustment');
 
@@ -3828,8 +3768,9 @@ function removeOpenFollowupsFrom(scheduleId, date) {
 // chore due today is completed and the bonus hasn't already been recorded.
 // Never removes points; safe to call any time a user's chore set changes (e.g. reassignment).
 function awardDailyRegularBonusIfDue(userId, date) {
-  const today = getTodayLocalDateString();
-  const todaysChores = getTodaysRegularChoresForUser(userId, today);
+  // The day being completed decides, not today: a chore done for an earlier
+  // day pays that day's bonus only when that day's chores are all done.
+  const todaysChores = getTodaysRegularChoresForUser(userId, date);
   const uncompletedRegularChores = todaysChores.filter(cs => cs.completed_today == 0);
 
   if (!todaysChores.length || uncompletedRegularChores.length) {
@@ -3896,6 +3837,9 @@ function completeChoreSchedule(input) {
   const { chore_schedule_id, user_id, date } = input || {};
   if (!chore_schedule_id || !user_id || !date) {
     return { status: 400, error: 'chore_schedule_id, user_id, and date are required' };
+  }
+  if (!normalizeDueDate(date).valid) {
+    return { status: 400, error: 'date must be a real YYYY-MM-DD date' };
   }
 
   const schedule = db.prepare('SELECT cs.*, c.clam_value, c.title FROM chore_schedules cs JOIN chores c ON cs.chore_id = c.id WHERE cs.id = ?').get(chore_schedule_id);
@@ -3997,6 +3941,9 @@ function uncompleteChoreSchedule(input) {
   if (!chore_schedule_id || !user_id || !date) {
     return { status: 400, error: 'chore_schedule_id, user_id, and date are required' };
   }
+  if (!normalizeDueDate(date).valid) {
+    return { status: 400, error: 'date must be a real YYYY-MM-DD date' };
+  }
 
   // kind-based lookup finds the actual completion record, never a transfer
   // payout or a stale missed row (issue #72).
@@ -4070,6 +4017,9 @@ fastify.post('/api/users/:id/clams/add', async (request, reply) => {
   try {
     if (!amount || amount <= 0) {
       return reply.status(400).send({ error: 'Valid positive amount is required' });
+    }
+    if (!normalizeDueDate(date).valid) {
+      return reply.status(400).send({ error: 'date must be a real YYYY-MM-DD date' });
     }
 
     const useDate = date || getTodayLocalDateString();
@@ -4638,6 +4588,11 @@ fastify.post('/api/settings/search', async (request, reply) => {
     console.log('=== SEARCHING SETTINGS ===');
     // coerce the request body to array of strings to search the settings database by key:
     const keys = Array.isArray(request.body) ? request.body : [request.body];
+    // selectSettings calls replaceAll on each key, so anything but a string
+    // (a number, an object, no body) threw and answered 500.
+    if (!keys.every((key) => typeof key === 'string')) {
+      return reply.status(400).send({ error: 'Body must be a setting key or an array of setting keys' });
+    }
 
     // Kept as-is: this is a documented plugin endpoint (plugin-development.md),
     // so third-party plugins call it and it stays supported. GET /api/settings
