@@ -7,5 +7,9 @@ describe('Google Drive Backup Service', () => {
     assert.strictEqual(typeof service.uploadBackupToDrive, 'function');
     assert.strictEqual(typeof service.listDriveBackups, 'function');
     assert.strictEqual(typeof service.initAutomatedBackupScheduler, 'function');
+    assert.strictEqual(typeof service.createBackupArchive, 'function');
+    assert.strictEqual(typeof service.getSchemaVersion, 'function');
+    assert.strictEqual(typeof service.uploadArchiveResumable, 'function');
+    assert.strictEqual(typeof service.initiateResumableUpload, 'function');
   });
 });

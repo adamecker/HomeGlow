@@ -226,6 +226,7 @@ const { HaLive } = require('./services/haLive');
 const { registerHaPanelRoutes, lazyDb } = require('./routes/haPanels');
 const { registerRoutineRoutes } = require('./routes/routines');
 const { registerNotificationRoutes } = require('./routes/notifications');
+const { registerLocalBackupRoutes } = require('./routes/localBackup');
 const notifications = require('./services/notifications');
 const webPush = require('web-push');
 const initializeDatabase = require('./migrations/initializeDatabase');
@@ -7258,6 +7259,18 @@ fastify.get('/api/system/backgroundTasks', async (request, reply) => {
 // Start server
 const start = async () => {
   try {
+    // Apply a staged Google Drive restore, if one is pending, before the
+    // database is opened: the file swap is only safe while no connection
+    // holds the database. See services/driveRestore.js.
+    if (!DEMO_MODE && dbPath !== ':memory:') {
+      try {
+        const { applyPendingRestore } = require('./services/driveRestore');
+        applyPendingRestore(dbPath, UPLOADS_ROOT);
+      } catch (restoreErr) {
+        console.error('[DriveRestore] Could not apply staged restore:', restoreErr.message);
+        throw restoreErr;
+      }
+    }
     db = await ConnectOrCreateDb();
     isFreshInstall = !doesTableExist('settings');
     if (isFreshInstall) {
@@ -7346,7 +7359,10 @@ const start = async () => {
       console.warn('================================================================');
     }
 
-    fastify.register(require("./routes/driveBackup"), { db });
+    // Google Drive backup & restore endpoints (Admin → Google Account).
+    fastify.register(require("./routes/driveBackup"), { db, uploadsDir: UPLOADS_ROOT, demoMode: DEMO_MODE });
+    // Backup to a file and restore from one, without Google (issue #305).
+    registerLocalBackupRoutes(fastify, { db: haDb, dbPath, uploadsDir: UPLOADS_ROOT, demoMode: DEMO_MODE });
     await fastify.listen({ port: process.env.PORT || 5000, host: '0.0.0.0' });
     console.log(`Server running on port ${process.env.PORT || 5000}`);
     // Panels on the dashboard: open the live link to Home Assistant.
