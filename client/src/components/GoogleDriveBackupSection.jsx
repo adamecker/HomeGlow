@@ -190,7 +190,7 @@ export default function GoogleDriveBackupSection() {
         </Alert>
       )}
 
-      <Stack spacing={2} sx={{ mb: 3, p: 2, bgcolor: 'rgba(255, 255, 255, 0.03)', borderRadius: 1.5 }}>
+      <Stack spacing={2} sx={{ mb: 3, p: 2, bgcolor: 'var(--hg-white-10)', borderRadius: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <Box>
             <Typography variant="subtitle2" fontWeight="600">Automated Nightly Backups</Typography>
