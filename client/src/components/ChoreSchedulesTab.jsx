@@ -47,24 +47,87 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_BASE_URL } from '../utils/apiConfig.js';
+import { CronExpressionParser } from 'cron-parser';
+import { getServerTimezoneSync } from '../utils/timezone.js';
 import SoundPicker from './SoundPicker.jsx';
 import ChoreIconPicker from './ChoreIconPicker.jsx';
-import ChoreScheduleFields from './ChoreScheduleFields.jsx';
 import { useTranslation } from 'react-i18next';
+import { getWeekdayLabels } from '../utils/dateUtils.js';
 import useIsMobile from '../hooks/useIsMobile.js';
 import { compactStackedTableSx } from '../utils/responsiveTable.js';
-import {
-  CRONTAB_PRESETS,
-  DEFAULT_SCHEDULE_FIELDS,
-  getNextOccurrence,
-  nextOccurrenceAt,
-  validateCrontab,
-  formatScheduleInterval,
-  computeCrontab,
-  updateScheduleFormHelper
-} from '../utils/choreScheduleUtils.js';
 import { compareByKey } from '../utils/choreHelpers.js';
 import ExpiresSelect from './ExpiresSelect.jsx';
+
+// Day labels come from the locale (index 0 = Sunday, matching crontab).
+const getDayOptions = () => getWeekdayLabels(0).map((label, value) => ({ label, value }));
+
+// Values are crontab expressions and never change; only the label is
+// translated, at render time.
+const CRONTAB_PRESETS = [
+  { key: 'daily', value: '0 0 * * *' },
+  { key: 'everyOtherDay', value: '0 0 */2 * *' },
+  { key: 'weekdays', value: '0 0 * * 1-5' },
+  { key: 'weekends', value: '0 0 * * 0,6' }
+];
+
+// The date the label is built from, exposed on its own so the Next Occurrence
+// column can sort on the instant rather than on the formatted string. Null
+// means there is no next occurrence: a one-time task, or an expression that
+// does not parse.
+function nextOccurrenceAt(crontab) {
+  if (!crontab) return null;
+  try {
+    const tz = getServerTimezoneSync();
+    return CronExpressionParser.parse(crontab, { tz }).next().toDate();
+  } catch {
+    return null;
+  }
+}
+
+function getNextOccurrence(crontab) {
+  if (!crontab) return 'One-time';
+  const next = nextOccurrenceAt(crontab);
+  if (!next) return 'Invalid expression';
+  const tz = getServerTimezoneSync();
+  return next.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+}
+
+function validateCrontab(crontab) {
+  if (!crontab) return null;
+  try {
+    CronExpressionParser.parse(crontab);
+    return null;
+  } catch (e) {
+    return e.message;
+  }
+}
+
+function daysToCrontab(days) {
+  const sorted = [...days].sort((a, b) => a - b);
+  return `0 0 * * ${sorted.join(',')}`;
+}
+
+function formatScheduleInterval(interval) {
+  if (!interval || typeof interval !== 'string') {
+    return null;
+  }
+
+  const match = interval.match(/^(\d+)([dwmy])$/i);
+  if (!match) {
+    return interval;
+  }
+
+  const count = match[1];
+  const unit = match[2].toLowerCase();
+  const unitLabelMap = {
+    d: 'day',
+    w: 'week',
+    m: 'month',
+    y: 'year'
+  };
+  const unitLabel = unitLabelMap[unit] || unit;
+  return `${count} ${unitLabel}${count === '1' ? '' : 's'}`;
+}
 
 const DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -85,31 +148,6 @@ function parseDateOnly(dateString) {
 
 function formatDateOnly(dateObj) {
   return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`;
-}
-
-// A header cell that re-sorts its table. `sortDirection` on the cell is what
-// puts `aria-sort` on the <th>, so the state is announced without a second
-// visually-hidden copy of it.
-function SortableHeader({ column, sort, onSort, children }) {
-  const active = sort.column === column;
-  return (
-    <TableCell sortDirection={active ? sort.direction : false}>
-      <TableSortLabel
-        active={active}
-        direction={active ? sort.direction : 'asc'}
-        onClick={() => onSort(column)}
-      >
-        {children}
-      </TableSortLabel>
-    </TableCell>
-  );
-}
-
-// Clicking the active column flips it; clicking a new one starts ascending,
-// which is the reading order for names and "soonest first" for dates.
-function nextSort(sort, column) {
-  if (sort.column !== column) return { column, direction: 'asc' };
-  return { column, direction: sort.direction === 'asc' ? 'desc' : 'asc' };
 }
 
 function toDateOnlyString(value) {
@@ -217,6 +255,31 @@ const followupRuleFromRow = (row) => ({
   delay_minutes: row.timing === 'after' ? Math.round(Number(row.amount) * (row.unit === 'hours' ? 60 : 1)) : 0,
 });
 
+// A header cell that re-sorts its table. `sortDirection` on the cell is what
+// puts `aria-sort` on the <th>, so the state is announced without a second
+// visually-hidden copy of it.
+function SortableHeader({ column, sort, onSort, children }) {
+  const active = sort.column === column;
+  return (
+    <TableCell sortDirection={active ? sort.direction : false}>
+      <TableSortLabel
+        active={active}
+        direction={active ? sort.direction : 'asc'}
+        onClick={() => onSort(column)}
+      >
+        {children}
+      </TableSortLabel>
+    </TableCell>
+  );
+}
+
+// Clicking the active column flips it; clicking a new one starts ascending,
+// which is the reading order for names and "soonest first" for dates.
+function nextSort(sort, column) {
+  if (sort.column !== column) return { column, direction: 'asc' };
+  return { column, direction: sort.direction === 'asc' ? 'desc' : 'asc' };
+}
+
 export default function ChoreSchedulesTab({ setSaveMessage }) {
   const { t } = useTranslation(['chores', 'common']);
   const isMobile = useIsMobile();
@@ -281,10 +344,18 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  const computeCrontab = (f) => {
+    if (f.isOneTime) return '';
+    if (f.scheduleMode === 'preset') return f.selectedPreset;
+    if (f.scheduleMode === 'days') return f.selectedDays.length > 0 ? daysToCrontab(f.selectedDays) : '';
+    return f.customCrontab;
+  };
+
   const updateScheduleForm = (updates) => {
     setScheduleForm(prev => {
-      const { next, crontabError: err } = updateScheduleFormHelper(prev, updates);
-      setCrontabError(err);
+      const next = { ...prev, ...updates };
+      const cron = computeCrontab(next);
+      setCrontabError(next.isOneTime ? null : validateCrontab(cron));
       return next;
     });
   };
@@ -299,13 +370,12 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
   const openEditSchedule = (schedule) => {
     setEditingSchedule(schedule);
     const isOneTime = !schedule.crontab;
-    const isOnceCompleted = schedule.duration === 'once-completed';
     let scheduleMode = 'preset';
     let selectedPreset = '0 0 * * *';
     let selectedDays = [];
     let customCrontab = '';
 
-    if (!isOneTime && schedule.crontab) {
+    if (!isOneTime) {
       const preset = CRONTAB_PRESETS.find(p => p.value === schedule.crontab);
       if (preset) {
         scheduleMode = 'preset';
@@ -366,8 +436,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
     setSavingSchedule(true);
     try {
-      const isIntervalSchedule = !scheduleForm.isOneTime && scheduleForm.duration === 'once-completed';
-      const normalizedInterval = isIntervalSchedule
+      const normalizedInterval = !scheduleForm.isOneTime && scheduleForm.duration === 'once-completed'
         ? `${scheduleForm.sleepCount}${scheduleForm.sleepUnit}`
         : null;
 
@@ -603,7 +672,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
   // What each sortable column orders by, which is not what the cell draws:
   // clams and the schedule count are numbers behind chips, and Next Occurrence
-  // is a date behind a localized label (or a calendar pill behind "today").
+  // is a date behind a localized label.
   //
   // A column is here only if ordering by it answers a question someone asks.
   // Description is free text and usually blank; Duration is four modes with no
@@ -618,7 +687,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
   const scheduleSortKeys = {
     chore: s => String(s?.title ?? ''),
     assignedTo: s => getUserName(s?.user_id),
-    nextOccurrence: s => nextOccurrenceAt(s?.crontab, s)?.getTime() ?? null,
+    nextOccurrence: s => nextOccurrenceAt(s?.crontab)?.getTime() ?? null,
     clams: s => Number(s?.clam_value ?? 0),
   };
 
@@ -783,7 +852,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                     className={c.description ? 'stack-full' : 'stack-empty'}
                   >
                     <Typography variant="body2" color="text.secondary">
-                      <Box component="span" sx={{ whiteSpace: "pre-line" }}>{c.description || <em style={{ opacity: 0.5 }}>{t('chores:schedules.noDescription')}</em>}</Box>
+                      {c.description || <em style={{ opacity: 0.5 }}>{t('chores:schedules.noDescription')}</em>}
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.clams')} className={c.clam_value > 0 ? undefined : 'stack-empty'}>
@@ -905,7 +974,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                         </Typography>
                       )}
                       {s.description && (
-                        <Typography variant="caption" color="text.secondary" sx={{ whiteSpace: "pre-line" }}>{s.description}</Typography>
+                        <Typography variant="caption" color="text.secondary">{s.description}</Typography>
                       )}
                     </Box>
                   </TableCell>
@@ -922,7 +991,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                       editing the schedule. */}
                   <TableCell data-label={t('chores:schedules.nextOccurrence')}>
                     <Typography variant="body2" sx={{ fontSize: '0.75rem' }}>
-                      {getNextOccurrence(s.crontab, s)}
+                      {getNextOccurrence(s.crontab)}
                     </Typography>
                   </TableCell>
                   <TableCell data-label={t('chores:schedules.duration')}>
@@ -1301,10 +1370,14 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
 
             <Divider />
 
-            <ChoreScheduleFields
-              form={scheduleForm}
-              onChange={updateScheduleForm}
-              crontabError={crontabError}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={scheduleForm.isOneTime}
+                  onChange={(e) => updateScheduleForm({ isOneTime: e.target.checked })}
+                />
+              }
+              label={t('chores:schedules.oneTimeTask')}
             />
 
             {!scheduleForm.isOneTime && (
