@@ -763,7 +763,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                     />
                   </TableCell>
                   <TableCell data-label={t('common:labels.title')}>
-                    <Typography variant="body2" fontWeight="bold">
+                    <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
                       {/* Inline rather than its own column: this table stacks
                           into rows on mobile, and an icon-only column would
                           become a near-empty labelled row down there. */}
@@ -893,7 +893,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                 <TableRow key={s.id} sx={{ opacity: s.visible ? 1 : 0.5 }}>
                   <TableCell data-label={t('chores:schedules.chore')}>
                     <Box>
-                      <Typography variant="body2" fontWeight="bold">
+                      <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
                         {s.title}
                         {s.triggered_on && (
                           <Chip label={t('chores:followups.chip')} size="small" variant="outlined" sx={{ ml: 1 }} />
@@ -1307,6 +1307,167 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
               crontabError={crontabError}
             />
 
+            {!scheduleForm.isOneTime && (
+              <>
+                <RadioGroup
+                  row
+                  value={scheduleForm.scheduleMode}
+                  onChange={(e) => updateScheduleForm({ scheduleMode: e.target.value })}
+                >
+                  <FormControlLabel value="preset" control={<Radio size="small" />} label={t('chores:schedules.modePreset')} />
+                  <FormControlLabel value="days" control={<Radio size="small" />} label={t('chores:schedules.modeDaysOfWeek')} />
+                  <FormControlLabel value="custom" control={<Radio size="small" />} label={t('chores:schedules.modeCustomCrontab')} />
+                </RadioGroup>
+
+                <FormControl fullWidth size="small">
+                  <InputLabel>{t('chores:schedules.duration')}</InputLabel>
+                  <Select
+                    value={scheduleForm.duration}
+                    label={t('chores:schedules.duration')}
+                    onChange={(e) => updateScheduleForm({ duration: e.target.value })}
+                  >
+                    <MenuItem value="day-of">{t('chores:schedules.dayOf')}</MenuItem>
+                    <MenuItem value="until-completed">{t('chores:schedules.untilCompleted')}</MenuItem>
+                    <MenuItem value="once-completed">{t('chores:schedules.onceCompleted')}</MenuItem>
+                  </Select>
+                  <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, ml: 1.5 }}>
+                    {scheduleForm.duration === 'until-completed'
+                      ? 'This chore will appear daily until completed'
+                      : scheduleForm.duration === 'once-completed'
+                        ? 'This chore appears after a delay each time it is completed'
+                        : 'This chore will only appear on the day it is scheduled'}
+                  </Typography>
+                </FormControl>
+
+                {scheduleForm.duration === 'once-completed' && (
+                  <Grid container spacing={2}>
+                    <Grid size={6}>
+                      <TextField
+                        fullWidth
+                        size="small"
+                        label={t('chores:schedules.sleepCount')}
+                        value={scheduleForm.sleepCount}
+                        onChange={(e) => {
+                          const digitsOnly = e.target.value.replace(/\D/g, '');
+                          updateScheduleForm({ sleepCount: digitsOnly });
+                        }}
+                        slotProps={{ htmlInput: { inputMode: 'numeric', pattern: '[0-9]*', min: 1 } }}
+                        error={isOnceCompletedMissingInterval}
+                        helperText={isOnceCompletedMissingInterval ? 'Required. Use digits only.' : 'Number of time units to wait.'}
+                      />
+                    </Grid>
+                    <Grid size={6}>
+                      <FormControl fullWidth size="small">
+                        <InputLabel>{t('chores:schedules.sleepUnit')}</InputLabel>
+                        <Select
+                          value={scheduleForm.sleepUnit}
+                          label={t('chores:schedules.sleepUnit')}
+                          onChange={(e) => updateScheduleForm({ sleepUnit: e.target.value })}
+                        >
+                          <MenuItem value="d">{t('chores:schedules.unitDays')}</MenuItem>
+                          <MenuItem value="w">{t('chores:schedules.unitWeeks')}</MenuItem>
+                          <MenuItem value="m">{t('chores:schedules.unitMonths')}</MenuItem>
+                          <MenuItem value="y">{t('chores:schedules.unitYears')}</MenuItem>
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                  </Grid>
+                )}
+
+                {scheduleForm.scheduleMode === 'preset' && (
+                  <FormControl fullWidth size="small">
+                    <InputLabel>{t('chores:schedules.schedulePreset')}</InputLabel>
+                    <Select
+                      value={scheduleForm.selectedPreset}
+                      label={t('chores:schedules.schedulePreset')}
+                      onChange={(e) => updateScheduleForm({ selectedPreset: e.target.value })}
+                    >
+                      {CRONTAB_PRESETS.map(p => (
+                        <MenuItem key={p.key} value={p.value}>
+                          <Box>
+                            <Typography variant="body2">{t(`chores:presets.${p.key}`)}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'var(--hg-font-mono)' }}>
+                              {p.value}
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                )}
+
+                {scheduleForm.scheduleMode === 'days' && (
+                  <Box>
+                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                      {t('chores:schedules.selectDays')}
+                    </Typography>
+                    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+                      {getDayOptions().map(day => (
+                        <Chip
+                          key={day.value}
+                          label={day.label}
+                          clickable
+                          color={scheduleForm.selectedDays.includes(day.value) ? 'primary' : 'default'}
+                          variant={scheduleForm.selectedDays.includes(day.value) ? 'filled' : 'outlined'}
+                          onClick={() => {
+                            const next = scheduleForm.selectedDays.includes(day.value)
+                              ? scheduleForm.selectedDays.filter(d => d !== day.value)
+                              : [...scheduleForm.selectedDays, day.value];
+                            updateScheduleForm({ selectedDays: next });
+                          }}
+                          size="small"
+                        />
+                      ))}
+                    </Box>
+                    {scheduleForm.selectedDays.length > 0 && (
+                      <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontFamily: 'var(--hg-font-mono)' }}>
+                        Generated: {daysToCrontab(scheduleForm.selectedDays)}
+                      </Typography>
+                    )}
+                    {scheduleForm.selectedDays.length === 0 && (
+                      <Alert severity="warning" sx={{ mt: 1 }}>
+                        {t('chores:schedules.selectAtLeastOneDay')}
+                      </Alert>
+                    )}
+                  </Box>
+                )}
+
+                {scheduleForm.scheduleMode === 'custom' && (
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label={t('chores:schedules.crontabExpression')}
+                    value={scheduleForm.customCrontab}
+                    onChange={(e) => updateScheduleForm({ customCrontab: e.target.value })}
+                    placeholder="0 0 * * 1"
+                    error={!!crontabError}
+                    helperText={crontabError || (scheduleForm.customCrontab.trim() ? 'Format: minute hour day-of-month month day-of-week' : t('chores:schedules.crontabRequired'))}
+                    slotProps={{ input: { sx: { fontFamily: 'var(--hg-font-mono)' } } }}
+                  />
+                )}
+              </>
+            )}
+
+            {!crontabError && (
+              <Alert severity={scheduleForm.isOneTime ? 'warning' : 'info'} icon={<Schedule />} sx={{ py: 0.5 }}>
+                <Typography variant="body2">
+                  <strong>{scheduleForm.isOneTime
+                    ? t('chores:schedules.oneTimeTaskShort')
+                    : t('chores:schedules.nextOccurrenceIs', { when: nextOccurrence })}</strong>
+                </Typography>
+                {!scheduleForm.isOneTime && currentCrontab && (
+                  <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'var(--hg-font-mono)' }}>
+                    {currentCrontab}
+                  </Typography>
+                )}
+                {scheduleForm.isOneTime && (
+                  <Typography variant="caption" color="text.secondary">
+                    {t('chores:schedules.appearsOnce')}
+                  </Typography>
+                )}
+              </Alert>
+            )}
+
             <Divider />
 
             {scheduleForm.isOneTime ? (
@@ -1401,7 +1562,7 @@ export default function ChoreSchedulesTab({ setSaveMessage }) {
                   value={scheduleForm.reminder_interval_minutes}
                   onChange={(e) => updateScheduleForm({ reminder_interval_minutes: e.target.value })}
                   helperText={t('chores:schedules.repeatReminderHelp')}
-                  inputProps={{ min: 0 }}
+                  slotProps={{ htmlInput: { min: 0 } }}
                   sx={{ maxWidth: 280 }}
                 />
               </Box>

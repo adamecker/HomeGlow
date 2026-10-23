@@ -24,7 +24,7 @@ import {
 } from '@mui/icons-material';
 import axios from 'axios';
 import { API_BASE_URL } from '../utils/apiConfig.js';
-import GoogleDriveBackupSection from './GoogleDriveBackupSection.jsx';
+import BackupRestoreSection from './BackupRestoreSection.jsx';
 
 const initialDraft = { client_id: '', client_secret: '', redirect_uri: '' };
 
@@ -171,7 +171,7 @@ const GoogleAccountConnection = ({ onMessage }) => {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', mb: 1.5 }}>
         <GoogleIcon fontSize="small" />
         <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
           Google Account
@@ -238,14 +238,16 @@ const GoogleAccountConnection = ({ onMessage }) => {
           onChange={(e) => setDraft((p) => ({ ...p, redirect_uri: e.target.value }))}
           fullWidth
           disabled={!encryptionReady}
-          InputProps={{
-            endAdornment: (
-              <Tooltip title="Copy redirect URI">
-                <IconButton type="button" size="small" onClick={() => copy(draft.redirect_uri)}>
-                  <ContentCopy fontSize="small" />
-                </IconButton>
-              </Tooltip>
-            ),
+          slotProps={{
+            input: {
+              endAdornment: (
+                <Tooltip title="Copy redirect URI">
+                  <IconButton type="button" size="small" onClick={() => copy(draft.redirect_uri)}>
+                    <ContentCopy fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              ),
+            },
           }}
           helperText={
             draft.redirect_uri && draft.redirect_uri.startsWith('http://')
@@ -286,7 +288,7 @@ const GoogleAccountConnection = ({ onMessage }) => {
             {account.name ? account.name[0] : 'G'}
           </Avatar>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
+            <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
               <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                 {account.name || 'Google user'}
               </Typography>
@@ -337,7 +339,8 @@ const GoogleAccountConnection = ({ onMessage }) => {
             </Typography>
             <Typography variant="body2" color="text.secondary">
               Connecting your Google account enables Google Calendar (2-way sync) and Google Photos
-              as sources for the Calendar and Photo widgets.
+              as sources for the Calendar and Photo widgets, and nightly backups to Google Drive
+              (in Backup &amp; restore, below).
             </Typography>
           </Box>
           <Button
@@ -351,7 +354,7 @@ const GoogleAccountConnection = ({ onMessage }) => {
         </Box>
       )}
 
-      <GoogleDriveBackupSection />
+      <BackupRestoreSection googleConnected={Boolean(account)} />
     </Box>
   );
 };

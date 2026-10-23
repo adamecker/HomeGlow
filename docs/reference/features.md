@@ -477,27 +477,64 @@ messages), `WidgetContainer.jsx` (expanding, held taps, buttons, timers),
 `PluginWidgetWrapper.jsx` and `server/utils/pluginFrameTouch.js` (plugins),
 `CalendarWidget.jsx` (month view), `ExpandWidgetsSettings.jsx` (Admin).
 
-## Push notifications (phones)
+## Notifications (phones)
 
-- A device can get a notification when a chore or routine is done, or when
-  someone finishes all of today's chores, even with HomeGlow closed. Turned on
-  from the device itself, in **Admin Panel → Displays → Devices** ("Notifications
-  on this device"), which asks the phone's permission.
-- **Each device chooses for itself:** which of the two events, and about whom
-  (everyone, or chosen family members). The phone's own quiet hours (Focus, Do
-  Not Disturb) decide when it makes a sound. Completions by one person close
-  together update one notification ("Ava finished 3 chores") rather than
-  stacking up.
-- A tap opens HomeGlow. Messages are in the language the device used when it
-  turned them on (English or Spanish).
-- The devices table shows which devices have them on, with a test and a way to
-  turn them off from any device. Deleting a device turns its notifications off.
+HomeGlow can tell a phone when a chore or routine is done, or someone finishes
+all of today's chores, even with HomeGlow closed, and pass on what a plugin has
+to say. Everything is set up in **Admin Panel → System → Notifications**, one
+page with three ways of delivering the same messages:
+
+- **Browser notifications** (the default, enough for most households). A
+  device turns them on from itself, which asks the phone's permission. The page
+  shows this device's card, then every device that has them on, with a test and
+  a way to turn them off from any device. Deleting a device turns its
+  notifications off.
+- **ntfy**, for more: the free ntfy app (Android, including the F-Droid build,
+  and iPhone), on ntfy.sh or a self-hosted server. Turn it on, give the server
+  and an optional access token (stored encrypted, never shown again), then add
+  a topic for each phone. New topics get a long random name; on ntfy.sh, where
+  anyone who knows a topic can read it, the dialog says so. ntfy needs no HTTPS
+  and no web app on the Home Screen, only that the server can reach ntfy.
+- **The Home Assistant app**, when Home Assistant is connected (System →
+  Connections): every phone with the Companion app is listed, and a switch turns
+  each one on. Messages go through Home Assistant's `notify.mobile_app_*`
+  actions; only a title, a message, a tag, the tap address and (for urgent
+  ones) the alarm sound are ever sent.
+
+Common to all three:
+
+- **Each recipient chooses for itself** (a device, a topic, a phone): which
+  events, which plugins, and about whom (everyone, or chosen family members).
+  The phone's own quiet hours (Focus, Do Not Disturb) decide when it makes a
+  sound. Completions by one person close together update one notification
+  ("Ava finished 3 chores") in a browser and the Home Assistant app, rather
+  than stacking up.
+- **Plugins can send a message too**, when their manifest declares `"notify":
+  true` (a poll closed, the brisket is ready). They are listed under
+  **Messages from:** for each recipient, which hears only the ones it ticks;
+  each starts unticked. A plugin can say whom a message is about, and a
+  recipient's "About" choice then applies. Five a minute and 30 an hour per
+  plugin. See the plugin guide, "Sending a notification".
+- **Urgent:** a plugin can mark a message urgent, for what can't wait. It rings
+  through silent mode where the way of delivering allows: Android's alarm
+  sound and an iPhone critical alert through the Home Assistant app (the
+  iPhone's owner must allow Critical Alerts for it), ntfy's top priority, and
+  high urgency for browser push.
+- **A tap opens HomeGlow.** For ntfy and the Home Assistant app that is the
+  **Address a tap opens** at the top of the page (`NOTIFY_OPEN_URL`), which
+  starts as the address Admin is open on until saved.
+- Messages are in the language the recipient was set up in (English or
+  Spanish). Each recipient shows how its last message went.
+
+Browser notifications in more detail:
+
 - **Needs HTTPS.** Browsers only allow push on a secure page, so a HomeGlow
-  opened at `http://192.168.…` can't have them, and Admin doesn't offer them there. On iPhone and
-  iPad (iOS 16.4 or later), HomeGlow must be added to the Home Screen and opened
-  from there, which is why HomeGlow is now an installable app (a web app
-  manifest and icons). Away from home, a notification still arrives; opening
-  HomeGlow then needs whatever remote access the household has.
+  opened at `http://192.168.…` can't have them; the page then points to ntfy
+  and the Home Assistant app. On iPhone and iPad (iOS 16.4 or later), HomeGlow
+  must be added to the Home Screen and opened from there, which is why
+  HomeGlow is an installable app (a web app manifest and icons). Away from
+  home, a notification still arrives; opening HomeGlow then needs whatever
+  remote access the household has.
 - Messages go through the phone's own push service (Apple's, Google's or
   Mozilla's), encrypted end to end, so the service can't read them. The server
   signs them with a key pair it makes on first use; the private half is stored
@@ -505,10 +542,17 @@ messages), `WidgetContainer.jsx` (expanding, held taps, buttons, timers),
   `HOMEGLOW_PUSH_CONTACT` sets the contact address the push services see (by
   default, the project's GitHub page).
 
+In the public demo, sending (tests, and ntfy's connection, which holds a
+credential) is turned off.
+
 **Code:** `server/services/notifications.js` (who hears what, the wording,
-sending), `server/routes/notifications.js`, `client/public/sw.js` (shows a
-message, handles a tap), `client/src/utils/pushNotifications.js`,
-`client/src/components/DeviceNotifications.jsx`.
+browser push, and the channels), `server/services/ntfy.js`,
+`server/services/haNotify.js`, `server/routes/notifications.js`,
+`server/routes/ntfy.js`, `server/routes/haNotify.js`, `client/public/sw.js`
+(shows a browser notification, handles a tap),
+`client/src/utils/pushNotifications.js`, `client/src/components/NotificationsTab.jsx`
+and the components it uses (`DeviceNotifications.jsx`, `NtfyConnection.jsx`,
+`NtfyTopics.jsx`, `HaNotifyPhones.jsx`, `NotificationAudience.jsx`).
 
 ## Vacation mode
 
@@ -608,12 +652,17 @@ Everything HomeGlow holds (the database, the encryption key in use, and the
 uploaded photos, sounds and themes) can be saved to one `.tar.gz` file and
 restored from one, on the same server or on a new one when moving.
 
-- **Admin → System → Backup** (issue #305) needs no account:
+All of it is in **Admin → System → Connections**, under **Backup & restore** at
+the foot of the Google account card:
+- **A backup file** (issue #305) needs no account:
   - **Download backup** saves the file. It holds the key to every stored
     password and token, so when an admin PIN is set the server asks for it.
   - **Choose backup file** uploads one (up to 4 GB) to restore it.
-- **Google Drive** (#304, in System → Connections → Google account) makes the
-  same file every night, keeps the newest 14, and restores from any of them.
+- **Google Drive** (#304) appears in the same box once a Google account is
+  connected. It makes the same file every night, keeps the newest 14, and
+  restores from any of them.
+- **One status for both.** A staged restore, Restart now and Roll back show
+  once at the top of the box, whichever way the restore was staged.
 - **A restore is staged, then applied on restart.**
   - It is checked first: the manifest's database hash, SQLite's integrity
     check, and a backup from a newer HomeGlow is refused.
@@ -633,7 +682,7 @@ restored from one, on the same server or on a new one when moving.
 **Code:** `server/routes/localBackup.js`, `server/routes/driveBackup.js`,
 `server/services/googleDriveBackup.js` (the archive), `server/services/driveRestore.js`
 (staging and the start-up step), `server/utils/tarArchive.js`;
-`client/src/components/LocalBackupSection.jsx`, `GoogleDriveBackupSection.jsx`,
+`client/src/components/BackupRestoreSection.jsx`, `GoogleDriveBackupSection.jsx`,
 `RestoreStatusAlerts.jsx` (shared).
 
 ## Admin Panel & PIN

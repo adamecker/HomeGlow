@@ -226,8 +226,12 @@ const { HaLive } = require('./services/haLive');
 const { registerHaPanelRoutes, lazyDb } = require('./routes/haPanels');
 const { registerRoutineRoutes } = require('./routes/routines');
 const { registerNotificationRoutes } = require('./routes/notifications');
+const { registerNtfyRoutes } = require('./routes/ntfy');
+const { registerHaNotifyRoutes } = require('./routes/haNotify');
 const { registerLocalBackupRoutes } = require('./routes/localBackup');
 const notifications = require('./services/notifications');
+const ntfyService = require('./services/ntfy');
+const haNotifyService = require('./services/haNotify');
 const webPush = require('web-push');
 const initializeDatabase = require('./migrations/initializeDatabase');
 const migrateChoresDatabase = require('./migrations/migrateChoresDatabase');
@@ -894,6 +898,11 @@ function extractPluginManifest(htmlContent) {
   if (manifest.storage !== undefined && typeof manifest.storage !== 'boolean') {
     errors.push('storage must be a boolean.');
   }
+  // true lets the plugin send short messages to the phones that ticked it
+  // (/api/plugin/v1/notify, services/notifications.js).
+  if (manifest.notify !== undefined && typeof manifest.notify !== 'boolean') {
+    errors.push('notify must be a boolean.');
+  }
   // false keeps the plugin from being expanded to half or the whole page on
   // a display that expands widgets (client/src/utils/widgetExpand.js), for a
   // plugin whose own double-tap or drag would fight with it.
@@ -1093,15 +1102,38 @@ const routines = registerRoutineRoutes(fastify, {
   awardDailyBonusesAfterRemoval: (userIds) => awardDailyBonusesAfterRemoval(userIds),
 });
 
-// Push notifications to devices, from the chore events (services/notifications.js).
+// Notifications, from the chore events and plugins (services/notifications.js
+// composes them), set up in Admin → System → Notifications: browser push to
+// a device, and two more ways to deliver the same messages, ntfy topics and
+// the Home Assistant Companion app's phones.
+const ntfy = ntfyService.createNtfy({
+  db: haDb,
+  post: (url, body, options) => axios.post(url, body, options),
+  agentFor: (url) => httpsAgentFor(new URL(url)),
+  encrypt,
+  decrypt,
+});
+const haNotify = haNotifyService.createHaNotify({ db: haDb, ha: homeAssistant, live: haLive });
 const notifier = notifications.createNotifier({
   db: haDb,
   send: (subscription, payload, options) => webPush.sendNotification(subscription, payload, options),
   generateKeys: () => webPush.generateVAPIDKeys(),
   encrypt,
   decrypt,
+  channels: [ntfy, haNotify],
 });
-registerNotificationRoutes(fastify, { notifier, demoBlocked, ensureDevice: (name) => ensureDeviceExists(name) });
+registerNtfyRoutes(fastify, { ntfy, demoBlocked });
+registerHaNotifyRoutes(fastify, { haNotify, demoBlocked });
+registerNotificationRoutes(fastify, {
+  notifier,
+  db: haDb,
+  demoBlocked,
+  ensureDevice: (name) => ensureDeviceExists(name),
+  pluginManifest: (pluginId) => {
+    const row = db.prepare('SELECT manifest_json FROM plugins WHERE plugin_id = ?').get(pluginId);
+    return row ? parseJsonObject(row.manifest_json, {}) : null;
+  },
+});
 pluginEvents.subscribe((message) => { void notifier.handle(message); });
 
 // Helper: Load legacy on-disk widget registry (kept for the debug endpoint)
@@ -4529,6 +4561,8 @@ const REDACTED_SETTING_KEYS = new Set([
   'WEATHER_API_KEY',
   // The push key's private half (services/notifications.js); only the server signs.
   notifications.PRIVATE_KEY_SETTING,
+  // The ntfy access token (services/ntfy.js); GET /api/notifications/ntfy says whether one is set.
+  ntfyService.TOKEN_SETTING,
 ]);
 
 // Convert an array of {key, value} settings rows into a single {key: value}

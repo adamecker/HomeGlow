@@ -84,11 +84,9 @@ import { revealTabPicker } from '../utils/revealTabPicker.js';
 import { getDeviceApiBase, getDeviceName, setDeviceName, isValidDeviceName } from '../utils/deviceName.js';
 import { fetchPinRemembered, setPinRemembered, forgetPinOnAllDevices, shouldPromptForPin } from '../utils/adminPinDevice.js';
 import PinModal from './PinModal';
-import LocalBackupSection from './LocalBackupSection.jsx';
 import ChoreSchedulesTab from './ChoreSchedulesTab';
 import ChoreHistoryTab from './ChoreHistoryTab';
-import { DeviceNotificationsCard, DeviceNotificationStatus } from './DeviceNotifications';
-import { notificationsColumnShown } from '../utils/pushNotifications.js';
+import NotificationsTab from './NotificationsTab';
 import RoutinesTab from './RoutinesTab';
 import TabIconModal from './TabIconModal';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
@@ -337,7 +335,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   const [devices, setDevices] = useState([]);
   const [copyDeviceDialog, setCopyDeviceDialog] = useState({ open: false, device: null });
   const [deleteDeviceDialog, setDeleteDeviceDialog] = useState({ open: false, device: null });
-  const showNotifications = notificationsColumnShown(devices);
   const [renameDeviceDialog, setRenameDeviceDialog] = useState({
     open: false,
     currentName: '',
@@ -2732,7 +2729,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                                           type="number"
                                           label={label}
                                           value={value ?? ''}
-                                          inputProps={{ min: setting.min, max: setting.max }}
+                                          slotProps={{ htmlInput: { min: setting.min, max: setting.max } }}
                                           onChange={(event) => {
                                             const parsed = Number(event.target.value);
                                             setValue(event.target.value === '' || Number.isNaN(parsed) ? '' : parsed);
@@ -2967,8 +2964,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   </Box>
                 </Box>
 
-                <DeviceNotificationsCard deviceName={currentDeviceName} onChanged={fetchDevices} />
-
                 <TableContainer component={Paper}>
                   <Table sx={stackableTableSx}>
                     <TableHead>
@@ -2976,7 +2971,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                         <TableCell>{t('common:labels.name')}</TableCell>
                         <TableCell>{t('admin:devices.lastUpdated')}</TableCell>
                         <TableCell>{t('admin:subTabs.widgets')}</TableCell>
-                        {showNotifications && <TableCell>{t('admin:devices.notifications.column')}</TableCell>}
                         <TableCell width={120}>{t('common:labels.actions')}</TableCell>
                       </TableRow>
                     </TableHead>
@@ -2999,11 +2993,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                             <TableCell data-label={t('admin:subTabs.widgets')}>
                               <Chip label={Number(device.widgets) || 0} size="small" />
                             </TableCell>
-                            {showNotifications && (
-                              <TableCell data-label={t('admin:devices.notifications.column')}>
-                                <DeviceNotificationStatus device={device} onChanged={fetchDevices} />
-                              </TableCell>
-                            )}
                             <TableCell>
                               {isCurrent ? (
                                 <IconButton
@@ -4215,7 +4204,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
         </Card>
       )}
 
-      {/* System: language and time, connections, about */}
+      {/* System: language and time, connections, notifications, about */}
       {location.section === 'region' && (
         <Card>
           <CardContent>
@@ -4457,8 +4446,12 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
         </Card>
       )}
 
-      {/* Backup to a file and restore from one, without Google (issue #305). */}
-      {location.section === 'backup' && <LocalBackupSection />}
+      {location.section === 'notifications' && (
+        <NotificationsTab
+          deviceName={currentDeviceName}
+          onOpenConnections={() => navigate({ tab: 'system', section: 'connections' })}
+        />
+      )}
 
       {location.section === 'about' && (
         <Card>

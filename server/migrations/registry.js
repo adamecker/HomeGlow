@@ -45,4 +45,5 @@ module.exports = [
   { schemaId: 37, migrationPath: './migrations/schema37-routineStreakBase', },
   { schemaId: 38, migrationPath: './migrations/schema38-choreExpiry', },
   { schemaId: 39, migrationPath: './migrations/schema39-deviceNotifications', },
+  { schemaId: 40, migrationPath: './migrations/schema40-notificationChannels', },
 ];
