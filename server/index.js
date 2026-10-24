@@ -167,6 +167,7 @@ const googleCalendar = require('./services/googleCalendar');
 const appleCalDAV = require('./services/appleCalDAV');
 const googlePhotos = require('./services/googlePhotos');
 const appearanceAssets = require('./services/appearanceAssets');
+const { sniffImage, IMAGE_MIMES } = require('./utils/imageType');
 const { inlineCssImports } = require('./utils/inlineCssImports');
 const themeStore = require('./services/themeStore');
 const googlePhotosPicker = require('./services/googlePhotosPicker');
@@ -188,6 +189,8 @@ const immichPhotos = require('./services/immichPhotos');
 const { PLUGIN_AUTHOR_MAX_LENGTH, resolvePluginAuthor } = require('./utils/pluginAuthor');
 const { listPluginsFromTree } = require('./utils/pluginStoreListing');
 const { PLUGIN_FRAME_TOUCH_SCRIPT } = require('./utils/pluginFrameTouch');
+const { pluginFrameShimScript } = require('./utils/pluginFrameShims');
+const pluginRequestPolicy = require('./utils/pluginRequestPolicy');
 const { sqliteUtcToIso, sqliteUtcToMs } = require('./utils/sqliteTime');
 const {
   DEVICE_NAME_RULE_MESSAGE,
@@ -259,6 +262,25 @@ const shuffleInPlace = (array) => {
 const GITHUB_REPO_OWNER = 'jherforth';
 const GITHUB_REPO_NAME = 'HomeGlowPlugins';
 const GITHUB_API_BASE = 'https://api.github.com';
+// Where the plugin listing's download addresses point, and the only place a
+// GitHub install fetches from.
+const PLUGIN_REPOSITORY_RAW_ORIGIN = 'https://raw.githubusercontent.com';
+const PLUGIN_REPOSITORY_RAW_PATH = `/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/`;
+
+// A download address in the plugin repository, as the address that will be
+// fetched, or null. Checked after parsing: fetching normalizes the URL, so
+// ".../HomeGlowPlugins/%2e%2e/%2e%2e/someone/else/..." would otherwise pass
+// a check on the raw string and load another repository's file. Encoded dots,
+// slashes and backslashes are refused outright, so nothing on GitHub's side
+// can decode them into a different path either.
+function pluginRepositoryFileUrl(raw) {
+  if (typeof raw !== 'string' || raw.length > 2048) return null;
+  let url;
+  try { url = new URL(raw); } catch { return null; }
+  if (url.origin !== PLUGIN_REPOSITORY_RAW_ORIGIN || url.username || url.password) return null;
+  if (!url.pathname.startsWith(PLUGIN_REPOSITORY_RAW_PATH) || /%2e|%2f|%5c|\\/i.test(url.pathname)) return null;
+  return url.href;
+}
 
 const DEFAULT_HOMEGLOW_REPOSITORY = 'jherforth/HomeGlow';
 const BACKEND_VERSION = (process.env.BACKEND_VERSION || process.env.APP_VERSION || serverPackageJson.version || 'dev').trim();
@@ -569,11 +591,53 @@ function decryptPassword(encryptedPassword) {
   }
 }
 
-// Initialize Fastify with CORS
+// CORS (mrramam/HomeGlow#50, #62). The dashboard is served from the API's own
+// origin in production and needs none. Who else may read a response:
+//   - a plugin (its sandboxed frame sends Origin: null), only for what
+//     utils/pluginRequestPolicy.js lets it reach;
+//   - the CORS_ORIGINS list, and in development the Vite dev server.
+// Any other site gets no CORS headers, so it can't read the API.
+const isAllowedApiOrigin = pluginRequestPolicy.createOriginAllowList();
+// The secret plugin tokens are signed with, made on first use. Read through
+// a function: the database opens after the routes are registered.
+let pluginTokenSecret = null;
+function getPluginTokenSecret() {
+  if (pluginTokenSecret) return pluginTokenSecret;
+  const key = pluginRequestPolicy.TOKEN_SECRET_SETTING;
+  db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)').run(key, crypto.randomBytes(32).toString('base64url'));
+  pluginTokenSecret = db.prepare('SELECT value FROM settings WHERE key = ?').get(key).value;
+  return pluginTokenSecret;
+}
+const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+const CORS_HEADERS = ['Content-Type', 'Authorization'];
 fastify.register(require('@fastify/cors'), {
-  origin: '*', // Allow all origins for development. Consider restricting in production.
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], // Explicitly allow PATCH
-  allowedHeaders: ['Content-Type', 'Authorization'], // Add any other headers your client might send
+  delegator: (request, callback) => {
+    const origin = request.headers.origin;
+    if (origin === 'null') {
+      const decision = pluginRequestPolicy.decide(request, getPluginTokenSecret);
+      return callback(null, decision.allow
+        ? { origin: true, credentials: true, methods: CORS_METHODS, allowedHeaders: [...CORS_HEADERS, 'X-HomeGlow-Plugin-Token'] }
+        : { origin: false });
+    }
+    if (isAllowedApiOrigin(origin)) return callback(null, { origin: true, methods: CORS_METHODS, allowedHeaders: CORS_HEADERS });
+    return callback(null, { origin: false });
+  },
+});
+
+// A plugin's request (Origin: null) goes no further than the policy allows,
+// and the route it reaches knows which plugin is asking.
+fastify.decorateRequest('pluginCaller', null);
+fastify.addHook('onRequest', async (request, reply) => {
+  if (request.headers.origin !== 'null' || request.method === 'OPTIONS') return undefined;
+  const decision = pluginRequestPolicy.decide(request, getPluginTokenSecret);
+  if (!decision.applies) return undefined;
+  if (!decision.allow) {
+    // Readable by the plugin, so its author sees why.
+    reply.header('Access-Control-Allow-Origin', 'null');
+    return reply.status(403).send({ error: decision.reason });
+  }
+  request.pluginCaller = decision.subject;
+  return undefined;
 });
 
 fastify.register(multipart, {
@@ -600,6 +664,18 @@ fastify.register(multipart, {
 // response to a Fastify Reply and `res.setHeader` became an uncaught
 // TypeError that killed the process on the first file request. Headers are
 // deliberately kept minimal to avoid "Request Header Fields Too Large".
+// Uploaded files are served with nosniff and a sandbox CSP, so a file that
+// isn't the image or sound it claims to be (an .html or .svg stored before
+// uploads were typed by content) can't run script in the app's origin.
+// Neither header affects an <img> or <audio> that loads it.
+const UPLOAD_SERVE_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'Content-Security-Policy': 'sandbox',
+};
+fastify.addHook('onRequest', async (request, reply) => {
+  if (request.url.startsWith('/Uploads/')) reply.headers(UPLOAD_SERVE_HEADERS);
+});
+
 fastify.register(require('@fastify/static'), {
   root: path.join(__dirname, 'uploads'),
   prefix: '/Uploads/',
@@ -663,8 +739,14 @@ fastify.get('/widgets/:filename', async (request, reply) => {
     // which storage/settings namespace to talk to. plugin_id is validated to
     // [a-z0-9-] at install time, so it is safe to embed verbatim.
     if (pluginId) {
-      injection += `<script>window.__HOMEGLOW_PLUGIN__={id:"${pluginId}",apiVersion:"v1"};</script>`;
+      // Fixed: a plugin can't rename itself (mrramam/HomeGlow#49).
+      injection += `<script>Object.defineProperty(window,"__HOMEGLOW_PLUGIN__",{value:Object.freeze({id:"${pluginId}",apiVersion:"v1"}),writable:false,configurable:false,enumerable:true});</script>`;
     }
+    // The page's token and its storage, before any plugin script runs
+    // (utils/pluginFrameShims.js). A plain widget's token reaches no
+    // plugin's platform API, only the read-only core data.
+    const tokenSubject = pluginId ? `plugin:${pluginId}` : `widget:${filename}`;
+    injection += `<script>${pluginFrameShimScript(pluginRequestPolicy.issueToken(getPluginTokenSecret(), tokenSubject))}</script>`;
     // Every plugin, manifest or not, so a two-finger swipe between tabs works
     // over it and a blocked pinch stays blocked on it. Inert until the
     // dashboard turns it on for this display.
@@ -828,6 +910,19 @@ function pluginContentSha(content) {
 const PLUGIN_SETTING_TYPES = new Set(['number', 'string', 'boolean', 'select']);
 const PLUGIN_SETTING_SCOPES = new Set(['household', 'device']);
 
+// Segments an increment's path may never walk through: on a plain object each
+// reaches Object.prototype (or a function), so a crafted path would write into
+// every object in the server process (mrramam/HomeGlow#54).
+const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+// What is wrong with a split increment path, or null.
+function storagePathProblem(segments) {
+  if (segments.some((segment) => segment.length === 0)) return 'path segments must be non-empty.';
+  if (segments.some((segment) => UNSAFE_PATH_SEGMENTS.has(segment))) {
+    return 'path segments may not be __proto__, constructor or prototype.';
+  }
+  return null;
+}
+
 // Returns { manifest: object|null, errors: string[] }. A missing block is not
 // an error (legacy widget); a present-but-invalid block is, so a typo'd
 // manifest fails the upload loudly instead of silently installing as legacy.
@@ -947,8 +1042,8 @@ function extractPluginManifest(htmlContent) {
           errors.push(`reactions[${index}].key must be a valid storage key.`);
         }
         if (typeof reaction.path !== 'string' || reaction.path.length === 0 ||
-            reaction.path.split('.').some((segment) => segment.length === 0)) {
-          errors.push(`reactions[${index}].path must be a non-empty dot-separated path.`);
+            storagePathProblem(reaction.path.split('.'))) {
+          errors.push(`reactions[${index}].path must be a dot-separated path of non-empty segments, none of them __proto__, constructor or prototype.`);
         }
         // Optional multiplier applied to the resolved delta — factor: -1 lets a
         // mirror reaction (e.g. on chore.uncompleted) compensate a setting- or
@@ -1382,8 +1477,17 @@ fastify.delete('/api/plugin/v1/storage/:pluginId/:key', async (request, reply) =
 // the clam-bucket siphon needs ("add N to the give pool") without a general
 // transaction API. Creates the key/path if missing. Body: { path, delta }.
 const incrementPluginStorage = (pluginId, key, pathSegments, delta) => {
+  const problem = storagePathProblem(pathSegments);
+  if (problem) throw Object.assign(new Error(problem), { statusCode: 400 });
   const row = db.prepare('SELECT value_json FROM plugin_storage WHERE plugin_id = ? AND key = ?').get(pluginId, key);
   let doc = {};
+  if (!row) {
+    // A new key counts against the cap, as a PUT does.
+    const { count } = db.prepare('SELECT COUNT(*) AS count FROM plugin_storage WHERE plugin_id = ?').get(pluginId);
+    if (count >= PLUGIN_STORAGE_MAX_KEYS) {
+      throw Object.assign(new Error(`Plugin storage is limited to ${PLUGIN_STORAGE_MAX_KEYS} keys.`), { statusCode: 413 });
+    }
+  }
   if (row) {
     try {
       doc = JSON.parse(row.value_json);
@@ -1395,9 +1499,11 @@ const incrementPluginStorage = (pluginId, key, pathSegments, delta) => {
     }
   }
 
+  // Own properties only: an inherited one is never stepped onto or written.
+  const own = (object, name) => (Object.hasOwn(object, name) ? object[name] : undefined);
   let target = doc;
   for (const segment of pathSegments.slice(0, -1)) {
-    if (target[segment] === undefined) {
+    if (own(target, segment) === undefined) {
       target[segment] = {};
     }
     if (!target[segment] || typeof target[segment] !== 'object' || Array.isArray(target[segment])) {
@@ -1407,7 +1513,7 @@ const incrementPluginStorage = (pluginId, key, pathSegments, delta) => {
   }
 
   const leaf = pathSegments[pathSegments.length - 1];
-  const current = target[leaf] === undefined ? 0 : target[leaf];
+  const current = own(target, leaf) === undefined ? 0 : target[leaf];
   if (typeof current !== 'number' || !Number.isFinite(current)) {
     throw Object.assign(new Error(`Value at path is not a number.`), { statusCode: 409 });
   }
@@ -1442,8 +1548,9 @@ fastify.post('/api/plugin/v1/storage/:pluginId/:key/increment', async (request, 
     return reply.status(400).send({ error: 'delta must be a finite number.' });
   }
   const pathSegments = incrementPath.split('.');
-  if (pathSegments.some((segment) => segment.length === 0)) {
-    return reply.status(400).send({ error: 'path segments must be non-empty.' });
+  const pathProblem = storagePathProblem(pathSegments);
+  if (pathProblem) {
+    return reply.status(400).send({ error: pathProblem });
   }
 
   try {
@@ -1614,7 +1721,15 @@ fastify.put('/api/plugin/v1/settings/:pluginId', async (request, reply) => {
 // message ({ event, payload, emittedAt }) and the client bridge filters per
 // plugin against its declared events. Delivery is ephemeral by design (no
 // replay) — durable state belongs in plugin storage.
+// Each stream holds a subscriber and a heartbeat timer until it closes, so
+// the number open at once is capped well above a household's dashboards.
+const EVENT_STREAM_MAX = 100;
+let openEventStreams = 0;
 fastify.get('/api/plugin/v1/events/stream', (request, reply) => {
+  if (openEventStreams >= EVENT_STREAM_MAX) {
+    return reply.status(503).send({ error: 'Too many open event streams.' });
+  }
+  openEventStreams += 1;
   reply.hijack();
   reply.raw.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -1622,10 +1737,11 @@ fastify.get('/api/plugin/v1/events/stream', (request, reply) => {
     'Connection': 'keep-alive',
     // Tell the Nginx reverse proxy not to buffer the stream.
     'X-Accel-Buffering': 'no',
-    // reply.hijack() bypasses @fastify/cors, so mirror its policy (origin '*',
-    // see the cors registration above) or cross-origin EventSources (dev mode)
-    // are blocked by the browser.
-    'Access-Control-Allow-Origin': '*',
+    // reply.hijack() bypasses @fastify/cors, so mirror its policy (see the
+    // cors registration above) or cross-origin EventSources (dev mode) are
+    // blocked by the browser. Plugins never reach here: the request policy
+    // refuses them the stream.
+    ...(isAllowedApiOrigin(request.headers.origin) ? { 'Access-Control-Allow-Origin': request.headers.origin } : {}),
   });
   reply.raw.write(': connected\n\n');
 
@@ -1637,7 +1753,8 @@ fastify.get('/api/plugin/v1/events/stream', (request, reply) => {
     reply.raw.write(': ping\n\n');
   }, 25000);
 
-  request.raw.on('close', () => {
+  request.raw.once('close', () => {
+    openEventStreams -= 1;
     clearInterval(heartbeat);
     unsubscribe();
   });
@@ -1994,16 +2111,23 @@ fastify.post('/api/widgets/github/install', async (request, reply) => {
     if (!download_url || !filename) {
       return reply.status(400).send({ error: 'download_url and filename are required' });
     }
+    // Only a file in the plugin repository, as the listing gives it: the
+    // server fetches this address, so it must not be one a caller chooses.
+    const downloadUrl = pluginRepositoryFileUrl(download_url);
+    if (!downloadUrl) {
+      return reply.status(400).send({ error: `download_url must be a file in ${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME} on raw.githubusercontent.com` });
+    }
 
     console.log(`Installing widget ${filename} from GitHub...`);
 
     // Download the widget file
-    const response = await axios.get(download_url, {
+    const response = await axios.get(downloadUrl, {
       headers: {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'User-Agent': 'HomeGlow-Server/1.0'
       },
-      timeout: 15000
+      timeout: 15000,
+      maxRedirects: 0,
     });
 
     // Sanitize filename
@@ -2036,7 +2160,7 @@ fastify.post('/api/widgets/github/install', async (request, reply) => {
       fallbackName: name || effectiveFilename.replace('.html', ''),
       content,
       source: 'github',
-      originalUrl: download_url,
+      originalUrl: downloadUrl,
     });
     if (result.error) {
       return reply.status(result.status).send({ error: result.error });
@@ -2054,15 +2178,11 @@ fastify.post('/api/widgets/github/install', async (request, reply) => {
   } catch (error) {
     console.error('Error installing GitHub widget:', error);
     if (error.response) {
-      return reply.status(error.response.status).send({
-        error: `Failed to download widget: ${error.response.status} ${error.response.statusText}`,
-        details: error.response.data
+      return reply.status(502).send({
+        error: `Failed to download widget: GitHub answered ${error.response.status} ${error.response.statusText}`,
       });
     }
-    return reply.status(500).send({
-      error: 'Failed to install widget from GitHub',
-      details: error.message
-    });
+    return reply.status(500).send({ error: 'Failed to install widget from GitHub' });
   }
 });
 
@@ -4267,9 +4387,10 @@ fastify.post('/api/users/:id/upload-picture', async (request, reply) => {
 
     console.log('File received:', data.filename, 'Type:', data.mimetype);
 
-    // Validate file type
-    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif'];
-    if (!allowedTypes.includes(data.mimetype)) {
+    // The type, and the stored extension, come from the file's bytes.
+    const buffer = await data.toBuffer();
+    const sniffed = sniffImage(buffer);
+    if (!sniffed || !['jpg', 'png', 'gif'].includes(sniffed.ext)) {
       console.log('Invalid file type:', data.mimetype);
       return reply.status(400).send({ error: 'Only image files (JPEG, PNG, GIF) are allowed' });
     }
@@ -4279,14 +4400,13 @@ fastify.post('/api/users/:id/upload-picture', async (request, reply) => {
     await fs.mkdir(usersDir, { recursive: true });
 
     // Generate unique filename
-    const fileExtension = data.filename.split('.').pop();
-    const filename = `user_${id}_${Date.now()}.${fileExtension}`;
+    const filename = `user_${id}_${Date.now()}.${sniffed.ext}`;
     const filepath = path.join(usersDir, filename);
 
     console.log('Saving file to:', filepath);
 
     // Save file
-    await fs.writeFile(filepath, await data.toBuffer());
+    await fs.writeFile(filepath, buffer);
     console.log('File saved successfully');
 
     // Update user record
@@ -4563,6 +4683,8 @@ const REDACTED_SETTING_KEYS = new Set([
   notifications.PRIVATE_KEY_SETTING,
   // The ntfy access token (services/ntfy.js); GET /api/notifications/ntfy says whether one is set.
   ntfyService.TOKEN_SETTING,
+  // Signs plugin tokens (utils/pluginRequestPolicy.js).
+  pluginRequestPolicy.TOKEN_SECRET_SETTING,
 ]);
 
 // Convert an array of {key, value} settings rows into a single {key: value}
@@ -5203,17 +5325,16 @@ fastify.get('/api/proxy', async (request, reply) => {
     whitelist = []; // Default to empty for security
   }
 
-  // For immediate use, we'll ensure the calendar API is always allowed.
-  // A more robust solution might involve seeding this in the database on startup.
-  if (!whitelist.includes('calapi.inadiutorium.cz')) {
-    whitelist.push('calapi.inadiutorium.cz');
-    console.log('Added calapi.inadiutorium.cz to whitelist');
-  }
-
+  // Set when a redirect leads off the whitelist, to answer 403 for it.
+  let blockedRedirect = null;
   try {
     const target = new URL(targetUrl);
     const targetHostname = target.hostname;
     console.log('Target hostname:', targetHostname);
+
+    if (!['http:', 'https:'].includes(target.protocol)) {
+      return reply.status(400).send({ error: 'The proxy only fetches http:// and https:// addresses.' });
+    }
 
     if (!whitelist.includes(targetHostname)) {
       console.warn(`Proxy request blocked for non-whitelisted domain: ${targetHostname}`);
@@ -5233,6 +5354,16 @@ fastify.get('/api/proxy', async (request, reply) => {
         'Accept-Encoding': 'gzip, deflate'
       },
       maxRedirects: 5,
+      // A whitelisted host may redirect, but only to another whitelisted one:
+      // otherwise any of them could send the proxy to an address on the
+      // household's own network.
+      beforeRedirect: (options) => {
+        const hop = String(options.hostname || '').replace(/^\[|\]$/g, '');
+        if (!['http:', 'https:'].includes(options.protocol) || !whitelist.includes(hop)) {
+          blockedRedirect = hop || String(options.protocol);
+          throw new Error(`Redirect to ${blockedRedirect} is not on the proxy whitelist.`);
+        }
+      },
       validateStatus: function (status) {
         return status < 500; // Resolve only if the status code is less than 500
       },
@@ -5255,15 +5386,14 @@ fastify.get('/api/proxy', async (request, reply) => {
       reply.header('Content-Type', response.headers['content-type']);
     }
 
-    // Add CORS headers
-    reply.header('Access-Control-Allow-Origin', '*');
-    reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
     console.log('Sending successful response');
     return reply.status(response.status).send(response.data);
 
   } catch (error) {
+    if (blockedRedirect) {
+      console.warn(`Proxy redirect blocked: ${blockedRedirect} is not whitelisted`);
+      return reply.status(403).send({ error: 'The target redirected to a domain that is not allowed through the proxy.' });
+    }
     console.error('Error in proxy request:', error.message);
     console.error('Full error details:', {
       message: error.message,
@@ -5314,14 +5444,25 @@ fastify.get('/api/proxy', async (request, reply) => {
 
 // Prize routes
 
+const PRIZE_DESCRIPTION_MAX = 500;
+
 // Shared validation for the prize create/update body. Returns { error } on
-// failure, or the parsed { name, clam_cost } on success.
+// failure, or the parsed { name, clam_cost, description } on success.
+// description is optional: undefined leaves it as it is (PATCH), and an
+// empty string or null clears it.
 const validatePrizeBody = (body) => {
-  const { name, clam_cost } = body || {};
+  const { name, clam_cost, description } = body || {};
   if (!name || !clam_cost || clam_cost <= 0) {
     return { error: 'Prize name and a positive clam cost are required.' };
   }
-  return { name, clam_cost };
+  if (description !== undefined && description !== null && typeof description !== 'string') {
+    return { error: 'Prize description must be text.' };
+  }
+  if (typeof description === 'string' && description.trim().length > PRIZE_DESCRIPTION_MAX) {
+    return { error: `Prize description must be ${PRIZE_DESCRIPTION_MAX} characters or fewer.` };
+  }
+  const parsedDescription = description === undefined ? undefined : ((description || '').trim() || null);
+  return { name, clam_cost, description: parsedDescription };
 };
 
 fastify.get('/api/prizes', async (request, reply) => {
@@ -5335,14 +5476,14 @@ fastify.get('/api/prizes', async (request, reply) => {
 });
 
 fastify.post('/api/prizes', async (request, reply) => {
-  const { name, clam_cost, error: validationError } = validatePrizeBody(request.body);
+  const { name, clam_cost, description, error: validationError } = validatePrizeBody(request.body);
   if (validationError) {
     return reply.status(400).send({ error: validationError });
   }
   try {
     const repeatable = request.body.repeatable === true ? 1 : 0;
-    const stmt = db.prepare('INSERT INTO prizes (name, clam_cost, repeatable) VALUES (?, ?, ?)');
-    const info = stmt.run(name, clam_cost, repeatable);
+    const stmt = db.prepare('INSERT INTO prizes (name, clam_cost, repeatable, description) VALUES (?, ?, ?, ?)');
+    const info = stmt.run(name, clam_cost, repeatable, description ?? null);
     return { id: info.lastInsertRowid };
   } catch (error) {
     console.error('Error adding prize:', error);
@@ -5352,15 +5493,18 @@ fastify.post('/api/prizes', async (request, reply) => {
 
 fastify.patch('/api/prizes/:id', async (request, reply) => {
   const { id } = request.params;
-  const { name, clam_cost, error: validationError } = validatePrizeBody(request.body);
+  const { name, clam_cost, description, error: validationError } = validatePrizeBody(request.body);
   if (validationError) {
     return reply.status(400).send({ error: validationError });
   }
   try {
+    // repeatable and description change only when the body names them.
     const repeatable = request.body.repeatable === true ? 1 : (request.body.repeatable === false ? 0 : null);
-    const info = repeatable === null
-      ? db.prepare('UPDATE prizes SET name = ?, clam_cost = ? WHERE id = ?').run(name, clam_cost, id)
-      : db.prepare('UPDATE prizes SET name = ?, clam_cost = ?, repeatable = ? WHERE id = ?').run(name, clam_cost, repeatable, id);
+    const sets = ['name = ?', 'clam_cost = ?'];
+    const values = [name, clam_cost];
+    if (repeatable !== null) { sets.push('repeatable = ?'); values.push(repeatable); }
+    if (description !== undefined) { sets.push('description = ?'); values.push(description); }
+    const info = db.prepare(`UPDATE prizes SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
     if (info.changes === 0) {
       return reply.status(404).send({ error: 'Prize not found' });
     }
@@ -5400,7 +5544,7 @@ fastify.get('/api/prize-offers', async (request, reply) => {
     return db.prepare(`
       SELECT po.id, po.prize_id, po.status, po.requested_by, po.requested_at, po.created_at,
              po.split_user_ids,
-             p.name, p.clam_cost, p.repeatable,
+             p.name, p.clam_cost, p.repeatable, p.description,
              u.username AS requested_by_name
       FROM prize_offers po
       JOIN prizes p ON po.prize_id = p.id
@@ -5677,7 +5821,17 @@ fastify.get('/api/connections/google/authorize', async (request, reply) => {
 fastify.get('/api/connections/google/callback', async (request, reply) => {
   if (demoBlocked(reply)) return;
   const { code, state, error: oauthError } = request.query || {};
-  const renderPage = (title, message, ok) => {
+  // title and message carry Google's ?error=, error messages and the
+  // account's name, so both are escaped here for every caller.
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+  // The result goes to the opener with target '*': this page cannot know the
+  // app's origin when the API is served from another one, and the message
+  // carries only ok. The client accepts it only from its own popup.
+  const renderPage = (rawTitle, rawMessage, ok) => {
+    const title = escapeHtml(rawTitle);
+    const message = escapeHtml(rawMessage);
     reply.header('Content-Type', 'text/html; charset=utf-8');
     return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>
 <style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}
@@ -6024,6 +6178,9 @@ fastify.post('/api/connections/apple/calendars', async (request, reply) => {
 fastify.get('/api/calendar-sources', async (request, reply) => {
   try {
     const rows = db.prepare('SELECT id, name, type, url, username, color, enabled, sort_order, created_at FROM calendar_sources ORDER BY sort_order, id').all();
+    // A private ICS link reads the whole calendar to whoever holds it, so a
+    // plugin gets everything but the address and the account.
+    if (request.pluginCaller) return rows.map(({ url, username, ...rest }) => rest);
     return rows;
   } catch (error) {
     console.error('Error fetching calendar sources:', error);
@@ -6630,7 +6787,15 @@ fastify.get('/api/photo-sources/:sourceId/uploaded/:photoId/file', async (reques
     if (!row) return reply.status(404).send({ error: 'Photo not found' });
     const filePath = path.join(__dirname, 'uploads', 'homeglow-photos', String(sourceId), row.filename);
     if (!fsSync.existsSync(filePath)) return reply.status(404).send({ error: 'File missing' });
-    reply.header('Content-Type', row.mime_type || 'image/jpeg');
+    // A row stored before uploads were typed by content can name any type,
+    // SVG included; anything but a known image is only a download.
+    if (IMAGE_MIMES.has(row.mime_type)) {
+      reply.header('Content-Type', row.mime_type);
+    } else {
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Content-Disposition', 'attachment');
+    }
+    reply.headers(UPLOAD_SERVE_HEADERS);
     reply.header('Cache-Control', 'private, max-age=86400');
     return reply.send(fsSync.createReadStream(filePath));
   } catch (error) {
@@ -6665,19 +6830,23 @@ fastify.post('/api/photo-sources/:sourceId/uploaded', async (request, reply) => 
         continue;
       }
       try {
-        const ext = path.extname(part.filename || '') || '.jpg';
-        const safeBase = crypto.randomBytes(12).toString('hex');
-        const filename = `${safeBase}${ext.toLowerCase()}`;
-        const filePath = path.join(uploadDir, filename);
         const buffer = await part.toBuffer();
         if (part.file.truncated) {
           failed.push({ name: part.filename, reason: 'Larger than 25 MB' });
           continue;
         }
+        // The extension and the stored type come from the file's bytes.
+        const sniffed = sniffImage(buffer);
+        if (!sniffed) {
+          failed.push({ name: part.filename, reason: 'Not a supported image' });
+          continue;
+        }
+        const filename = `${crypto.randomBytes(12).toString('hex')}.${sniffed.ext}`;
+        const filePath = path.join(uploadDir, filename);
         await fs.writeFile(filePath, buffer);
         const info = db.prepare(
           `INSERT INTO homeglow_photos (source_id, filename, original_name, mime_type, size) VALUES (?, ?, ?, ?, ?)`
-        ).run(sourceId, filename, part.filename || null, part.mimetype, buffer.length);
+        ).run(sourceId, filename, part.filename || null, sniffed.mime, buffer.length);
         added.push({ id: info.lastInsertRowid, filename, original_name: part.filename });
       } catch (err) {
         console.error('Upload failure for part:', err);

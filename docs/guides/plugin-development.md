@@ -17,7 +17,7 @@ Related reading:
 | | Basic widget | Platform plugin |
 | --- | --- | --- |
 | **What it is** | A single `.html` file rendered in a sandboxed iframe | The same file **plus an embedded manifest** |
-| **Can call the REST API** | ✅ (same-origin) | ✅ |
+| **Can call the REST API** | ✅ core reads ([§10.0](#100-the-sandbox-what-a-plugin-can-reach)) | ✅ plus its own platform API |
 | **Server-side storage** | — | ✅ namespaced key/value store |
 | **Admin Panel settings** | enabled / transparency / refresh only | ✅ plus your own declared settings |
 | **Live core events** | — | ✅ `HomeGlow.on('clam.withdrawn', ...)` |
@@ -60,7 +60,8 @@ Create a single HTML file:
         document.documentElement.setAttribute('data-theme', theme);
       }
 
-      // Widgets are same-origin: call any HomeGlow API directly.
+      // Core reads like this one are open to plugins (§10.0). HomeGlow adds
+      // this page's token to the request for you.
       fetch('/api/users')
         .then((res) => res.json())
         .then((users) => {
@@ -76,7 +77,7 @@ Create a single HTML file:
 Install it via **Admin Panel → Dashboard → Plugins → Upload Widget**, enable it,
 assign it to a tab. Test both themes with `?theme=dark` / `?theme=light` while
 developing. For external services without CORS headers, use the proxy:
-`GET /api/proxy?url=...`.
+`GET /api/proxy?targetUrl=...`.
 
 > **Which endpoints can I call?** See the [API reference](#10-api-reference)
 > (§10) for the data endpoints a plugin commonly reads and the stable plugin
@@ -245,8 +246,10 @@ const existed = await HomeGlow.storage.remove('buckets:user:3');
 const { result, value } = await HomeGlow.storage.increment('give-pool', 'total', 2);
 ```
 
-Limits: 64 KB per value, 500 keys per plugin. (Storage works in demo mode too —
-it just resets with the demo cycle.)
+Limits: 64 KB per value, 500 keys per plugin; a write or an increment that
+would add key 501 answers `413`. An increment's path is dot-separated, and no
+segment may be empty or `__proto__`, `constructor` or `prototype` (`400`).
+(Storage works in demo mode too — it just resets with the demo cycle.)
 
 Raw endpoints (if you prefer `fetch`):
 
@@ -663,7 +666,7 @@ setting to `total` inside my `give-pool` storage document.*
 | --- | --- |
 | `on` | An event from the catalog. |
 | `action` | `"increment"` (the only action today). |
-| `key` / `path` | Storage document and dot-path to the number (created on demand). |
+| `key` / `path` | Storage document and dot-path to the number (created on demand). No segment may be `__proto__`, `constructor` or `prototype`. |
 | `delta` | A literal number, `{ "setting": "<key>" }` (a declared **household number** setting — resolved live at fire time), or `{ "payload": "<field>" }` (a numeric field from the event payload, e.g. `amount`). |
 | `factor` | Optional multiplier on the resolved delta (default `1`). `factor: -1` builds a **mirror reaction** that compensates an undo event. |
 
@@ -829,13 +832,55 @@ How the pieces cooperate:
   offers to purge the data on delete (`DELETE /api/widgets/:filename?purgeData=true`),
   which you should accept before installing a *different* plugin that uses the
   same id.
-- Plugins are **fully trusted** in HomeGlow's self-hosted model (no auth) —
-  install plugins you've read or trust the source of.
+- **Plugins are sandboxed** (§10.0): your page can't reach the dashboard, its
+  storage or another plugin, and the API answers only what a plugin may ask.
+  Still install plugins you've read or trust the source of: a plugin can show
+  anything, and can read the household's core data.
 
 ## 10. API reference
 
-Plugins run in a **same-origin, unauthenticated** iframe, so they can `fetch()`
-any HomeGlow endpoint directly. There are two tiers, and the difference matters:
+### 10.0 The sandbox: what a plugin can reach
+
+Your page runs in an iframe sandboxed **without `allow-same-origin`**
+(`allow-scripts allow-forms allow-popups`), so it has an opaque origin
+(mrramam/HomeGlow#50). In practice:
+
+- **Calling HomeGlow works as before.** `fetch('/api/users')`, XHR and the SDK
+  reach HomeGlow normally: the script HomeGlow serves your page with adds this
+  page's token (`X-HomeGlow-Plugin-Token`) to every request to HomeGlow's own
+  host, and to nothing else. The server lets a plugin's request through only
+  with that token, and only to:
+  - **your own platform API**, `/api/plugin/v1/{storage,settings,ha,notify}/<your id>/…`
+    (another plugin's id answers `403`; a plain widget has none);
+  - **the core reads in §10.2** (`GET`), and the four household writes
+    marked there (clams in and out, a chore done or undone);
+  - **the proxy** (§10.3), and a theme's files.
+
+  Everything else answers `403` with a reason: settings writes, backups,
+  restarts, the PIN, installs, the event stream (events reach you through
+  `HomeGlow.on`), and every other route. `/api/calendar-sources` leaves out
+  each calendar's `url` and `username` for a plugin: a private ICS link reads
+  the whole calendar.
+- **`localStorage` is your own**, on this display. The real one throws in a
+  sandbox, so HomeGlow puts a stand-in in its place: the same methods
+  (`getItem`, `setItem`, `removeItem`, `clear`, `key`, `length`, and
+  property access), kept by the dashboard for your plugin alone, 512 KB at most
+  (`QuotaExceededError` over it). `sessionStorage` lasts until the page
+  reloads. Keys your plugin saved before this change are carried over once on
+  each display if it is one of the published plugins; anything else starts
+  empty. Prefer `HomeGlow.storage` for anything that matters (§3).
+- **No `window.parent`.** Reading the dashboard's DOM, storage or globals
+  throws `SecurityError`. Talk to it only with `postMessage` (the SDK does),
+  as `homeglow:data-changed` (§5) and `HomeGlow.celebrate()` already do.
+- **`window.__HOMEGLOW_PLUGIN__` is fixed.** Your page can't claim another
+  plugin's id; the server checks the token, not the id you send.
+- **Other sites:** `fetch` to a third-party API works if that API sends CORS
+  headers for any origin (`*`); otherwise use the proxy. Your token is never
+  sent there.
+
+### Two tiers
+
+There are two tiers of the API, and the difference matters:
 
 - **The plugin platform API (`/api/plugin/v1/*`)** — a **stable, versioned
   contract**. It is frozen: a breaking change would ship as `/api/plugin/v2`,
@@ -863,19 +908,23 @@ see §3–§5. The raw endpoints:
 | `POST` | `/api/plugin/v1/storage/:pluginId/:key/increment` | body: `{ path, delta }` → `{ success, result, value }` (atomic) |
 | `GET` | `/api/plugin/v1/settings/:pluginId?device=<name>` | → `{ settingKey: value }` (manifest default ← stored value) |
 | `PUT` | `/api/plugin/v1/settings/:pluginId?device=<name>` | body: `{ settingKey: value }` → `{ success }` (validated; `?device=` required for device-scoped keys) |
-| `GET` | `/api/plugin/v1/events/stream` | SSE: `data: { event, payload, emittedAt }` per event |
+| `GET` | `/api/plugin/v1/events/stream` | SSE: `data: { event, payload, emittedAt }` per event. The dashboard's: a plugin gets events through `HomeGlow.on` (§5) and is refused the stream |
 | `GET` | `/api/plugin/v1/ha/:pluginId/state` | → `{ entities, control, live, unit, pinProtection, error? }` (§5a) |
 | `POST` | `/api/plugin/v1/ha/:pluginId/action` | body: `{ entity` or `entities, action, value?, pin?, device? }` → `{ ok, entities }`; `401 { needsPin }`, `403` outside your list, `429` over 10 a second |
 | `GET` | `/api/plugin/v1/ha/:pluginId/camera/:entityId` | → a declared camera's snapshot image |
 | `POST` | `/api/plugin/v1/notify/:pluginId` | body: `{ message, title?, tag?, about? }` → `{ sent }`; `403` without `"notify": true`, `429` over 5 a minute or 30 an hour |
 
-`:pluginId` must match your manifest `id`, and storage/settings require
-`"storage": true` / declared `settings` respectively (else `403`).
+`:pluginId` must be your manifest `id`: the server checks it against your
+page's token, so another plugin's id answers `403`. Storage and settings
+also require `"storage": true` / declared `settings` respectively (else `403`).
 
 ### 10.2 Core data endpoints (call at your own risk)
 
 The read endpoints and clam mutations a plugin most often integrates with.
-Shapes are current as of this writing — treat them as unversioned.
+Shapes are current as of this writing — treat them as unversioned. These are
+the core routes open to a plugin (§10.0): the `GET`s below, the four writes
+marked "emits …", and `POST /api/settings/search`. Any other core route
+answers a plugin `403`.
 
 **Users & clams** — a user's clam total is the sum of their `chore_history` rows.
 
@@ -926,10 +975,13 @@ your plugin can subscribe to (§5) and drive [reactions](#6-reactions--server-si
 ### 10.3 The CORS proxy (`/api/proxy`)
 
 To reach an external service that lacks CORS headers, route the request through
-`GET /api/proxy?url=<encoded-url>`. Two constraints:
+`GET /api/proxy?targetUrl=<encoded-url>`. Two constraints:
 
 - The target host must be in the `PROXY_WHITELIST` setting (an admin adds it) —
-  otherwise `403`.
+  otherwise `403`. A redirect is followed only to another whitelisted host, so
+  a whitelisted site can't send the proxy somewhere else on the household's
+  network; one that leads off the list answers `403`.
+- Only `http://` and `https://` addresses (`400` otherwise).
 - It is **disabled in demo mode** (so the demo can't be used as an open relay).
 
 ### Beyond this list

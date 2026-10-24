@@ -103,6 +103,7 @@ import { ADMIN_LAYOUT, ADMIN_TABS, normalizeAdminLocation, parseAdminHash, setAd
 import SoundPicker from './SoundPicker';
 import ControlsOnDisplay from './ControlsOnDisplay';
 import ExpandWidgetsSettings from './ExpandWidgetsSettings';
+import { frameNameFor } from '../utils/pluginLocalStore.js';
 import useFetchTabs from '../hooks/useFetchTabs.js';
 import { MAX_DOCK_HIDE_MINUTES, screensaverPreemptsDock } from '../utils/dockIdleHide.js';
 import useIsMobile from '../hooks/useIsMobile.js';
@@ -256,7 +257,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   // the add-user form when userId is null.
   const [defaultAvatars, setDefaultAvatars] = useState([]);
   const [avatarPicker, setAvatarPicker] = useState({ open: false, userId: null });
-  const [newPrize, setNewPrize] = useState({ name: '', clam_cost: 0, repeatable: false });
+  const [newPrize, setNewPrize] = useState({ name: '', clam_cost: 0, repeatable: false, description: '' });
   const [prizeOffers, setPrizeOffers] = useState([]);
   const [uploadedWidgets, setUploadedWidgets] = useState([]);
   // The browse thumbnails are cropped to 96x60, so a plugin's screenshot is
@@ -1650,7 +1651,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
         await axios.patch(`${API_BASE_URL}/api/prizes/${editingPrize.id}`, { ...editingPrize, repeatable: !!editingPrize.repeatable });
       } else {
         await axios.post(`${API_BASE_URL}/api/prizes`, { ...newPrize, repeatable: !!newPrize.repeatable });
-        setNewPrize({ name: '', clam_cost: 0, repeatable: false });
+        setNewPrize({ name: '', clam_cost: 0, repeatable: false, description: '' });
       }
       setEditingPrize(null);
       fetchPrizes();
@@ -2623,7 +2624,10 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                                 // it, so a plugin whose own UI saves one would fail here
                                 // while working fine on the dashboard.
                                 src={`${API_BASE_URL}/widgets/${encodeURIComponent(plugin.filename)}?theme=${document.documentElement.getAttribute('data-theme') || 'light'}&device=${encodeURIComponent(currentDeviceName)}&lang=${i18n.language || 'en'}`}
-                                sandbox="allow-scripts allow-same-origin"
+                                // Opaque, like the dashboard's frames (PluginWidgetWrapper):
+                                // a plugin can't act as HomeGlow from here either.
+                                sandbox="allow-scripts allow-forms"
+                                name={frameNameFor(plugin.filename)}
                                 style={{ width: '100%', height: '100%', border: 0, display: 'block', backgroundColor: 'var(--card-bg)' }}
                               />
                             </Box>
@@ -3892,6 +3896,17 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     </Button>
                   </Grid>
                   <Grid size={12}>
+                    <TextField
+                      fullWidth
+                      multiline
+                      minRows={2}
+                      label={t('admin:prizes.description')}
+                      value={newPrize.description}
+                      onChange={(e) => setNewPrize({ ...newPrize, description: e.target.value })}
+                      slotProps={{ htmlInput: { maxLength: 500 } }}
+                    />
+                  </Grid>
+                  <Grid size={12}>
                     <Tooltip title={t('admin:prizes.repeatableTooltip')}>
                       <FormControlLabel
                         control={
@@ -3912,46 +3927,64 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
               {prizes.map((prize) => (
                 <ListItem key={prize.id} sx={{ border: '1px solid var(--card-border)', borderRadius: 'var(--hg-radius-sm)', mb: 1 }}>
                   {editingPrize?.id === prize.id ? (
-                    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, width: '100%', alignItems: { xs: 'stretch', sm: 'center' } }}>
-                      <TextField
-                        label={t('admin:prizes.name')}
-                        value={editingPrize.name}
-                        onChange={(e) => setEditingPrize({ ...editingPrize, name: e.target.value })}
-                        sx={{ flex: 1 }}
-                      />
-                      <TextField
-                        label={t('admin:prizes.cost')}
-                        type="number"
-                        value={editingPrize.clam_cost}
-                        onChange={(e) => setEditingPrize({ ...editingPrize, clam_cost: parseInt(e.target.value) || 0 })}
-                        sx={{ width: { xs: '100%', sm: 120 } }}
-                      />
-                      <Tooltip title={t('admin:prizes.repeatableShortTooltip')}>
-                        <FormControlLabel
-                          control={
-                            <Switch
-                              checked={!!editingPrize.repeatable}
-                              onChange={(e) => setEditingPrize({ ...editingPrize, repeatable: e.target.checked })}
-                            />
-                          }
-                          label={t('admin:prizes.repeatableShort')}
-                          sx={{ mr: 0 }}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
+                      <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, width: '100%', alignItems: { xs: 'stretch', sm: 'center' } }}>
+                        <TextField
+                          label={t('admin:prizes.name')}
+                          value={editingPrize.name}
+                          onChange={(e) => setEditingPrize({ ...editingPrize, name: e.target.value })}
+                          sx={{ flex: 1 }}
                         />
-                      </Tooltip>
-                      <IconButton onClick={savePrize} color="primary">
-                        <Save />
-                      </IconButton>
-                      <IconButton onClick={() => setEditingPrize(null)}>
-                        <Cancel />
-                      </IconButton>
+                        <TextField
+                          label={t('admin:prizes.cost')}
+                          type="number"
+                          value={editingPrize.clam_cost}
+                          onChange={(e) => setEditingPrize({ ...editingPrize, clam_cost: parseInt(e.target.value) || 0 })}
+                          sx={{ width: { xs: '100%', sm: 120 } }}
+                        />
+                        <Tooltip title={t('admin:prizes.repeatableShortTooltip')}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                checked={!!editingPrize.repeatable}
+                                onChange={(e) => setEditingPrize({ ...editingPrize, repeatable: e.target.checked })}
+                              />
+                            }
+                            label={t('admin:prizes.repeatableShort')}
+                            sx={{ mr: 0 }}
+                          />
+                        </Tooltip>
+                        <IconButton onClick={savePrize} color="primary">
+                          <Save />
+                        </IconButton>
+                        <IconButton onClick={() => setEditingPrize(null)}>
+                          <Cancel />
+                        </IconButton>
+                      </Box>
+                      <TextField
+                        fullWidth
+                        multiline
+                        minRows={2}
+                        label={t('admin:prizes.description')}
+                        value={editingPrize.description || ''}
+                        onChange={(e) => setEditingPrize({ ...editingPrize, description: e.target.value })}
+                        slotProps={{ htmlInput: { maxLength: 500 } }}
+                      />
                     </Box>
                   ) : (
                     <>
                       <ListItemText
                         primary={prize.name}
-                        secondary={prize.repeatable
-                          ? t('admin:prizes.costLineRepeatable', { cost: prize.clam_cost })
-                          : t('admin:prizes.costLine', { cost: prize.clam_cost })}
+                        secondary={
+                          <>
+                            {prize.description && (
+                              <Box component="span" sx={{ display: 'block', whiteSpace: 'pre-line' }}>{prize.description}</Box>
+                            )}
+                            {prize.repeatable
+                              ? t('admin:prizes.costLineRepeatable', { cost: prize.clam_cost })
+                              : t('admin:prizes.costLine', { cost: prize.clam_cost })}
+                          </>
+                        }
                       />
                       <ListItemSecondaryAction>
                         <Tooltip title={prize.repeatable ? 'Add to store (stays on the shelf after each redemption)' : 'Add to store (one-time redeemable offer)'}>
