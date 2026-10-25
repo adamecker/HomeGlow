@@ -52,7 +52,7 @@ describe('built-in themes', () => {
   });
 
   it('are discovered from their folders, Classic first and then by name', () => {
-    expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual(['classic', 'fern', 'harbor-fog', 'morning-paper', 'night-owl', 'playroom-pop']);
+    expect(BUILT_IN_THEMES.map((theme) => theme.id)).toEqual(['classic', 'autumn', 'fern', 'glass', 'harbor-fog', 'morning-paper', 'night-owl', 'playroom-pop', 'storm']);
   });
 
   it('the stand-in themes are valid packages', () => {
