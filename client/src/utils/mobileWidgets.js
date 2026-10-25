@@ -38,7 +38,7 @@ export const buildMobileWidgetList = (widgets) => {
     if (!Array.isArray(widgets)) return [];
 
     return widgets
-        .filter((widget) => widget)
+        .filter((widget) => widget && widget.id !== 'photos-widget')
         .map((widget, index) => ({ widget, index }))
         .sort((a, b) => (rankOf(a.widget) - rankOf(b.widget)) || (a.index - b.index))
         .map(({ widget }) => widget);
