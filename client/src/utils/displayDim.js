@@ -216,9 +216,14 @@ export function setDimmingPaused(paused) {
 // FORK ONLY (prod): pixel shift against LCD image persistence. The wall
 // panel shows a largely static dashboard 24/7; nudging the whole app a
 // few pixels on a slow cycle keeps static edges off the exact same
-// pixels. Translate-only on #root (no scale, so no scrollbars), tiny
-// offsets, slow eased drift - imperceptible in normal use. The dim
-// shield lives on <body> outside #root, so it stays viewport-fixed.
+// pixels. Relative left/top offsets on #root, tiny, slow eased drift -
+// imperceptible in normal use. Never a transform: a transform would make
+// #root the containing block for its position:fixed descendants (dock,
+// screensaver, theme scene) and push them off screen, while relative
+// offsets leave every fixed layer viewport-anchored. A positive-x step
+// would widen the page, so horizontal overflow is hidden on <body>
+// while the shift runs. The dim shield lives on <body> outside #root,
+// so it stays viewport-fixed.
 export const PIXEL_SHIFT_OFFSETS = [
   { x: 0, y: 0 },
   { x: 4, y: 3 },
@@ -240,9 +245,12 @@ function applyPixelShift() {
   if (!root || !root.style) return;
   pixelShiftStep += 1;
   const { x, y } = pixelShiftOffset(pixelShiftStep);
-  root.style.transition = 'transform 1.5s ease';
-  root.style.transform = `translate(${x}px, ${y}px)`;
+  root.style.position = 'relative';
+  root.style.transition = 'left 1.5s ease, top 1.5s ease';
+  root.style.left = `${x}px`;
+  root.style.top = `${y}px`;
   if (root.dataset) root.dataset.pixelShift = 'on';
+  if (document.body) document.body.style.overflowX = 'hidden';
 }
 
 export function initDisplayDim() {
