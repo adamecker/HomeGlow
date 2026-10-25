@@ -212,6 +212,39 @@ export function setDimmingPaused(paused) {
   }
 }
 
+
+// FORK ONLY (prod): pixel shift against LCD image persistence. The wall
+// panel shows a largely static dashboard 24/7; nudging the whole app a
+// few pixels on a slow cycle keeps static edges off the exact same
+// pixels. Translate-only on #root (no scale, so no scrollbars), tiny
+// offsets, slow eased drift - imperceptible in normal use. The dim
+// shield lives on <body> outside #root, so it stays viewport-fixed.
+export const PIXEL_SHIFT_OFFSETS = [
+  { x: 0, y: 0 },
+  { x: 4, y: 3 },
+  { x: -3, y: 4 },
+  { x: -4, y: -2 },
+  { x: 3, y: -4 },
+];
+export const PIXEL_SHIFT_INTERVAL_MS = 4 * 60 * 1000;
+
+export function pixelShiftOffset(step) {
+  const n = PIXEL_SHIFT_OFFSETS.length;
+  return PIXEL_SHIFT_OFFSETS[((step % n) + n) % n];
+}
+
+let pixelShiftStep = 0;
+function applyPixelShift() {
+  if (typeof document === 'undefined') return;
+  const root = document.getElementById('root');
+  if (!root || !root.style) return;
+  pixelShiftStep += 1;
+  const { x, y } = pixelShiftOffset(pixelShiftStep);
+  root.style.transition = 'transform 1.5s ease';
+  root.style.transform = `translate(${x}px, ${y}px)`;
+  if (root.dataset) root.dataset.pixelShift = 'on';
+}
+
 export function initDisplayDim() {
   if (started) return;
   started = true;
@@ -223,7 +256,15 @@ export function initDisplayDim() {
   window.addEventListener('message', onPluginActivity);
   lastActivity = Date.now();
   if (liveTarget() != null && config.after === 0) setDimmed(true);
+  // One timer drives both jobs: the idle tick, and the pixel shift on
+  // its own slower cadence (counted in seconds).
+  let pixelShiftSeconds = 0;
   window.setInterval(() => {
+    pixelShiftSeconds += 1;
+    if (pixelShiftSeconds * 1000 >= PIXEL_SHIFT_INTERVAL_MS) {
+      pixelShiftSeconds = 0;
+      applyPixelShift();
+    }
     if (adminPaused) return;
     if (!dimmed && liveTarget() != null && Date.now() - lastActivity >= config.after * 1000) {
       setDimmed(true);
