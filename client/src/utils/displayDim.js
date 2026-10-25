@@ -10,14 +10,20 @@
 // supported on a schedule: a milder daytime level and a much darker
 // night level (default window 00:00-06:00).
 //
-// Configuration (URL query parameter wins over localStorage):
-//   ?dim=0.6        daytime target brightness (0-1; unset = no day dim)
-//   ?dimNight=0.08  night target brightness (unset = same as day)
-//   ?nightStart=0   night window start hour, local time (default 0)
-//   ?nightEnd=6     night window end hour, local time (default 6)
-//   ?dimAfter=20    idle seconds before dimming (default 20; 0 = always)
-// Levels persist to localStorage 'hg-dim' / 'hg-dim-night'. Live tuning
-// from devtools: hgSetDim(0.6) sets the day level, hgSetDim() disables.
+// Configuration lives in the appearance settings (household default plus
+// per-display override, see utils/appearance.js) and is applied live by
+// updateDisplayDimming() whenever the resolved appearance changes. Kiosk
+// URL query parameters still work as a temporary override on top of the
+// settings, so existing kiosk launch URLs keep working during transition:
+//   ?dim=0.6        daytime target brightness (0-1)
+//   ?dimNight=0.08  night target brightness
+//   ?nightStart=0   night window start hour, local time
+//   ?nightEnd=6     night window end hour, local time
+//   ?dimAfter=20    idle seconds before dimming (0 = always)
+// Any dim parameter present also enables dimming for this session, even if
+// the settings have it off. Live tuning from devtools: hgSetDim(0.6) sets a
+// runtime day level, hgSetDim() clears the runtime override (settings win
+// again); unlike the old localStorage build it does not persist.
 //
 // While dimmed, the page background is forced black (unpainted canvas
 // would otherwise show as a bright edge) and scrollbars are hidden
@@ -25,82 +31,87 @@
 // Wake detection uses a transparent full-screen shield while dimmed:
 // plugin widgets render in iframes whose pointer events never reach this
 // document, but the shield sits above them and catches the first tap.
-const KEY = 'hg-dim';
-const NIGHT_KEY = 'hg-dim-night';
-const AFTER_KEY = 'hg-dim-after';
-const DEFAULT_AFTER_S = 20;
-const DEFAULT_NIGHT_START = 0;
-const DEFAULT_NIGHT_END = 6;
 
-let dayTarget = null;
-let nightTarget = null;
-let nightStart = DEFAULT_NIGHT_START;
-let nightEnd = DEFAULT_NIGHT_END;
-let idleAfterMs = DEFAULT_AFTER_S * 1000;
-let dimmed = false;
-let lastActivity = Date.now();
-let shield = null;
+import { DEFAULT_DIMMING, normalizeDimming } from './appearance.js';
 
-function stored(key) {
+// Effective config: the resolved settings, with any URL parameters present
+// layered on top. Pure, so it is unit-testable without a DOM.
+export function resolveDimmingConfig({ settings, search = '' } = {}) {
+  const base = normalizeDimming(settings);
+  let params = null;
   try {
-    return window.localStorage.getItem(key);
+    params = new URLSearchParams(search);
   } catch {
-    return null;
+    params = null;
   }
-}
-
-function store(key, value) {
-  try {
-    if (value == null) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, value);
-  } catch {
-    // ignore
+  if (!params) return base;
+  const has = (name) => params.get(name) !== null;
+  if (!has('dim') && !has('dimNight') && !has('dimAfter') && !has('nightStart') && !has('nightEnd')) {
+    return base;
   }
+  const level = (name) => {
+    const v = parseFloat(params.get(name));
+    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
+  };
+  const hour = (name) => {
+    const v = parseInt(params.get(name), 10);
+    return Number.isFinite(v) ? Math.min(23, Math.max(0, v)) : undefined;
+  };
+  const after = params.get('dimAfter');
+  const afterValue = after === null ? undefined : parseFloat(after);
+  return normalizeDimming({
+    ...base,
+    enabled: true,
+    ...(level('dim') !== undefined ? { day: level('dim') } : {}),
+    ...(level('dimNight') !== undefined ? { night: level('dimNight') } : {}),
+    ...(Number.isFinite(afterValue) && afterValue >= 0 ? { after: afterValue } : {}),
+    ...(hour('nightStart') !== undefined ? { nightStart: hour('nightStart') } : {}),
+    ...(hour('nightEnd') !== undefined ? { nightEnd: hour('nightEnd') } : {}),
+  });
 }
 
-function param(name) {
-  try {
-    return new URLSearchParams(window.location.search).get(name);
-  } catch {
-    return null;
-  }
-}
-
-function parseLevel(raw) {
-  const v = parseFloat(raw);
-  return Number.isFinite(v) && v > 0 && v <= 1 ? v : null;
-}
-
-function parseHour(raw, fallback) {
-  const v = parseInt(raw, 10);
-  return Number.isFinite(v) && v >= 0 && v <= 24 ? v : fallback;
-}
-
-function resolveConfig() {
-  dayTarget = parseLevel(param('dim') ?? stored(KEY));
-  nightTarget = parseLevel(param('dimNight') ?? stored(NIGHT_KEY));
-  if (nightTarget == null) nightTarget = dayTarget;
-  nightStart = parseHour(param('nightStart'), DEFAULT_NIGHT_START);
-  nightEnd = parseHour(param('nightEnd'), DEFAULT_NIGHT_END);
-  const afterRaw = param('dimAfter') ?? stored(AFTER_KEY);
-  const after = parseFloat(afterRaw);
-  idleAfterMs = (Number.isFinite(after) && after >= 0 ? after : DEFAULT_AFTER_S) * 1000;
-}
-
-function isNight(now = new Date()) {
-  const h = now.getHours();
+// Pure night-window test: start inclusive, end exclusive; a window whose
+// start and end are equal never applies. Wraps past midnight.
+export function isNightAt(nightStart, nightEnd, date = new Date()) {
   if (nightStart === nightEnd) return false;
+  const h = date.getHours();
   if (nightStart < nightEnd) return h >= nightStart && h < nightEnd;
   return h >= nightStart || h < nightEnd;
 }
 
-function activeTarget() {
-  return isNight() ? nightTarget : dayTarget;
+// The brightness target right now, or null when dimming is off.
+export function activeDimTarget(config, now = new Date()) {
+  if (!config || !config.enabled) return null;
+  return isNightAt(config.nightStart, config.nightEnd, now) ? config.night : config.day;
+}
+
+let config = { ...DEFAULT_DIMMING };
+let runtimeDay = null;
+let dimmed = false;
+let lastActivity = Date.now();
+let shield = null;
+let started = false;
+let settingsApplied = false;
+
+function searchString() {
+  try {
+    return window.location.search;
+  } catch {
+    return '';
+  }
+}
+
+// The live target: a devtools runtime level wins for the day target only;
+// the night level, window, and delay always come from the config.
+function liveTarget(now = new Date()) {
+  if (!config.enabled) return null;
+  if (isNightAt(config.nightStart, config.nightEnd, now)) return config.night;
+  return runtimeDay ?? config.day;
 }
 
 function render() {
   const el = document.documentElement;
-  const t = activeTarget();
+  const t = liveTarget();
   el.style.transition = 'filter 0.6s ease';
   // Scrollbars are composited by Chrome outside the filtered layer and
   // would stay full-brightness (a white strip at the edge); hide them
@@ -156,28 +167,47 @@ function poke() {
   if (dimmed) setDimmed(false);
 }
 
+// Apply the resolved appearance dimming, live. URL parameters still win
+// per-field (see resolveDimmingConfig). Saving in Admin counts as
+// activity, so a freshly enabled dimming never fires instantly.
+export function updateDisplayDimming(settings) {
+  config = resolveDimmingConfig({ settings, search: searchString() });
+  settingsApplied = true;
+  lastActivity = Date.now();
+  if (!started) return;
+  if (liveTarget() == null) setDimmed(false);
+  else if (config.after === 0) setDimmed(true);
+  else setDimmed(false);
+}
+
+// Devtools tuning: a runtime day level (null clears it, settings win again).
 export function applyDim(v) {
-  dayTarget = v == null ? null : parseLevel(v);
-  store(KEY, dayTarget == null ? null : String(dayTarget));
-  if (nightTarget == null) nightTarget = dayTarget;
-  if (activeTarget() == null) setDimmed(false);
-  else if (idleAfterMs === 0) setDimmed(true);
-  else render();
+  const parsed = v == null ? null : parseFloat(v);
+  runtimeDay = Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : null;
+  if (started) {
+    if (liveTarget() == null) setDimmed(false);
+    else if (config.after === 0) setDimmed(true);
+    else render();
+  }
 }
 
 export function initDisplayDim() {
-  resolveConfig();
+  if (started) return;
+  started = true;
+  // URL overrides apply immediately at boot, before settings have loaded;
+  // updateDisplayDimming() re-resolves with settings once they arrive. If
+  // settings already arrived first, keep them instead of re-resolving.
+  if (!settingsApplied) config = resolveDimmingConfig({ settings: undefined, search: searchString() });
   ensureStyle();
   ensureShield();
   window.hgSetDim = (v) => applyDim(v == null ? null : v);
-  if (dayTarget == null && nightTarget == null) return;
   for (const ev of ['pointerdown', 'touchstart', 'keydown', 'wheel']) {
     window.addEventListener(ev, poke, { passive: true, capture: true });
   }
   lastActivity = Date.now();
-  if (idleAfterMs === 0) setDimmed(true);
+  if (liveTarget() != null && config.after === 0) setDimmed(true);
   window.setInterval(() => {
-    if (!dimmed && activeTarget() != null && Date.now() - lastActivity >= idleAfterMs) {
+    if (!dimmed && liveTarget() != null && Date.now() - lastActivity >= config.after * 1000) {
       setDimmed(true);
     } else if (dimmed) {
       // Re-render so a day/night boundary crossing retargets the level.

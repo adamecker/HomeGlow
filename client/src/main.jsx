@@ -13,7 +13,9 @@ import { initDisplayDim } from './utils/displayDim.js';
 installStaleBuildReload(window, { base: import.meta.env.BASE_URL });
 
 // Wall kiosk panels can be dimmed below the hardware backlight floor via
-// ?dim=0.6 in the URL or localStorage 'hg-dim' (see utils/displayDim.js).
+// the appearance settings (household default plus per-display override);
+// kiosk URL parameters (?dim=0.6 etc.) still override per-field for this
+// session. See utils/displayDim.js.
 initDisplayDim();
 
 // A display that has never chosen a language starts in the household default,
