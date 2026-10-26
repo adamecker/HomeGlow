@@ -216,48 +216,8 @@ function onPluginActivity(event) {
 // zone for the night window; once set it sticks until a new one arrives.
 // Saving in Admin counts as activity, so a freshly enabled dimming never
 // fires instantly.
-// FORK ONLY (prod): kiosk URL overrides, restored for this household's
-// touchscreen. Upstream dropped these in the #334 rework (a kiosk launch
-// URL has no business steering settings upstream), but this display's
-// launch URL predates the settings UI and its ?dim values are what the
-// household was using. With no params present this is a no-op, so the
-// settings UI keeps working exactly as reviewed upstream. Pure, so it is
-// unit-testable without a DOM.
-export function applyKioskUrlOverrides(config, search = '') {
-  let params = null;
-  try {
-    params = new URLSearchParams(search);
-  } catch {
-    params = null;
-  }
-  if (!params) return config;
-  const has = (name) => params.get(name) !== null;
-  if (!has('dim') && !has('dimNight') && !has('dimAfter') && !has('nightStart') && !has('nightEnd')) {
-    return config;
-  }
-  const level = (name) => {
-    const v = parseFloat(params.get(name));
-    return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
-  };
-  const hour = (name) => {
-    const v = parseInt(params.get(name), 10);
-    return Number.isFinite(v) ? Math.min(23, Math.max(0, v)) : undefined;
-  };
-  const afterRaw = params.get('dimAfter');
-  const afterValue = afterRaw === null ? undefined : parseFloat(afterRaw);
-  return normalizeDimming({
-    ...config,
-    enabled: true,
-    ...(level('dim') !== undefined ? { day: level('dim') } : {}),
-    ...(level('dimNight') !== undefined ? { night: level('dimNight') } : {}),
-    ...(Number.isFinite(afterValue) && afterValue >= 0 ? { after: afterValue } : {}),
-    ...(hour('nightStart') !== undefined ? { nightStart: hour('nightStart') } : {}),
-    ...(hour('nightEnd') !== undefined ? { nightEnd: hour('nightEnd') } : {}),
-  });
-}
-
 export function updateDisplayDimming(settings, zone) {
-  config = applyKioskUrlOverrides(normalizeDimming(settings), typeof window !== 'undefined' && window.location ? window.location.search : '');
+  config = normalizeDimming(settings);
   if (zone !== undefined) timeZone = zone;
   lastActivity = Date.now();
   if (!started) return;
@@ -292,9 +252,6 @@ export function initDisplayDim() {
   window.addEventListener('message', onPluginActivity);
   lastActivity = Date.now();
   if (liveTarget() != null && config.after === 0) setDimmed(true);
-  // One timer drives both jobs: the idle tick, and the pixel shift on
-  // its own slower cadence (counted in seconds).
-  let pixelShiftSeconds = 0;
   window.setInterval(() => {
     if (config.pixelShift) {
       pixelShiftSeconds += 1;
