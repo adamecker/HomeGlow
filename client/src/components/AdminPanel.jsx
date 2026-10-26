@@ -81,6 +81,7 @@ import HomeAssistantPanels from './HomeAssistantPanels';
 import ThemeLibrary from './ThemeLibrary';
 import axios from 'axios';
 import { API_BASE_URL } from '../utils/apiConfig.js';
+import { editWholeNumber, savedWholeNumber } from '../utils/wholeNumberField.js';
 import { pinErrorText } from '../utils/pinErrors.js';
 import { revealTabPicker } from '../utils/revealTabPicker.js';
 import { getDeviceApiBase, getDeviceName, setDeviceName, isValidDeviceName } from '../utils/deviceName.js';
@@ -93,6 +94,7 @@ import RoutinesTab from './RoutinesTab';
 import TabIconModal from './TabIconModal';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
 import AdminFormSection from './AdminFormSection';
+import ProxyWhitelistSettings from './ProxyWhitelistSettings.jsx';
 import TimezoneSettings from './TimezoneSettings';
 import VersionInfoCard from './VersionInfoCard';
 import { groupPluginsByCategory, pluginStoreStatus, storeEntryOf } from '../utils/pluginCatalog.js';
@@ -948,7 +950,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
       await Promise.all([
         axios.post(`${API_BASE_URL}/api/settings`, { key: 'WEATHER_API_KEY', value: settings.WEATHER_API_KEY || '' }),
         axios.post(`${API_BASE_URL}/api/settings`, { key: 'WEATHER_PROVIDER', value: settings.WEATHER_PROVIDER || 'openweathermap' }),
-        axios.post(`${API_BASE_URL}/api/settings`, { key: 'PROXY_WHITELIST', value: settings.PROXY_WHITELIST || '' })
       ]);
       // Clear the write-only field and re-read what the server now holds.
       setSettings((prev) => ({ ...prev, WEATHER_API_KEY: '' }));
@@ -1650,9 +1651,9 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
       setIsLoading(true);
       if (editingPrize) {
         // repeatable is stored as 0/1; the API expects a boolean.
-        await axios.patch(`${API_BASE_URL}/api/prizes/${editingPrize.id}`, { ...editingPrize, repeatable: !!editingPrize.repeatable });
+        await axios.patch(`${API_BASE_URL}/api/prizes/${editingPrize.id}`, { ...editingPrize, clam_cost: savedWholeNumber(editingPrize.clam_cost), repeatable: !!editingPrize.repeatable });
       } else {
-        await axios.post(`${API_BASE_URL}/api/prizes`, { ...newPrize, repeatable: !!newPrize.repeatable });
+        await axios.post(`${API_BASE_URL}/api/prizes`, { ...newPrize, clam_cost: savedWholeNumber(newPrize.clam_cost), repeatable: !!newPrize.repeatable });
         setNewPrize({ name: '', clam_cost: 0, repeatable: false, description: '' });
       }
       setEditingPrize(null);
@@ -3276,7 +3277,24 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     sx={{ mb: 4 }}
                   />
 
-                  {screensaverSettings.mode === 'photos' && (
+                  {/* Coffee Table drops prints at its own, quicker pace. */}
+                  {screensaverSettings.mode === 'photos' && screensaverSettings.photoLayout === 'coffeeTable' && (
+                    <ScreensaverIntervalSlider
+                      label={t('admin:screensaver.coffeeTableRate')}
+                      value={screensaverSettings.coffeeTableSeconds ?? 4}
+                      onChange={(value) => setScreensaverSettings(prev => ({ ...prev, coffeeTableSeconds: value }))}
+                      min={1}
+                      max={20}
+                      marks={[
+                        { value: 1, label: '1s' },
+                        { value: 5, label: '5s' },
+                        { value: 10, label: '10s' },
+                        { value: 20, label: '20s' }
+                      ]}
+                    />
+                  )}
+
+                  {screensaverSettings.mode === 'photos' && screensaverSettings.photoLayout !== 'coffeeTable' && (
                     <ScreensaverIntervalSlider
                       label={t('admin:screensaver.photoInterval')}
                       value={screensaverSettings.slideshowInterval}
@@ -3304,7 +3322,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                         value={screensaverSettings.photoLayout || 'fit'}
                         onChange={(e) => setScreensaverSettings(prev => ({ ...prev, photoLayout: e.target.value }))}
                       >
-                        {['fit', 'ambient', 'collage'].map((layout) => (
+                        {['fit', 'ambient', 'collage', 'coffeeTable'].map((layout) => (
                           <FormControlLabel
                             key={layout}
                             value={layout}
@@ -3323,6 +3341,25 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                           />
                         ))}
                       </RadioGroup>
+
+                      {/* When, who and where on each photo, for the layouts
+                          that show several at once. */}
+                      {['collage', 'coffeeTable'].includes(screensaverSettings.photoLayout) && (
+                        <Box sx={{ mt: 1 }}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                checked={screensaverSettings.photoDetails === true}
+                                onChange={(e) => setScreensaverSettings(prev => ({ ...prev, photoDetails: e.target.checked }))}
+                              />
+                            }
+                            label={t('admin:screensaver.photoDetails')}
+                          />
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', ml: 6 }}>
+                            {t('admin:screensaver.photoDetailsHelp')}
+                          </Typography>
+                        </Box>
+                      )}
                     </Box>
                   )}
 
@@ -3886,7 +3923,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                       label={t('admin:prizes.cost')}
                       type="number"
                       value={newPrize.clam_cost}
-                      onChange={(e) => setNewPrize({ ...newPrize, clam_cost: parseInt(e.target.value) || 0 })}
+                      onChange={(e) => setNewPrize({ ...newPrize, clam_cost: editWholeNumber(e.target.value) })}
                     />
                   </Grid>
                   <Grid size={{ xs: 12, sm: 3 }}>
@@ -3944,7 +3981,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                           label={t('admin:prizes.cost')}
                           type="number"
                           value={editingPrize.clam_cost}
-                          onChange={(e) => setEditingPrize({ ...editingPrize, clam_cost: parseInt(e.target.value) || 0 })}
+                          onChange={(e) => setEditingPrize({ ...editingPrize, clam_cost: editWholeNumber(e.target.value) })}
                           sx={{ width: { xs: '100%', sm: 120 } }}
                         />
                         <Tooltip title={t('admin:prizes.repeatableShortTooltip')}>
@@ -4294,7 +4331,19 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
             <Typography variant="h6" gutterBottom>{t('admin:connections.heading')}</Typography>
 
             <Box sx={{ maxWidth: 700 }}>
+              {/* Not weather's: any plugin fetching another site uses it
+                  (issue #328). Saves on each change. */}
               <Typography variant="subtitle1" sx={{ mt: 1, mb: 1.5, fontWeight: 600 }}>
+                {t('admin:connections.proxyHeading')}
+              </Typography>
+              <ProxyWhitelistSettings
+                value={settings.PROXY_WHITELIST || ''}
+                onSaved={(value) => setSettings((prev) => ({ ...prev, PROXY_WHITELIST: value }))}
+              />
+
+              <Divider sx={{ my: 3 }} />
+
+              <Typography variant="subtitle1" sx={{ mt: 2, mb: 1.5, fontWeight: 600 }}>
                 {t('admin:connections.weatherHeading')}
               </Typography>
 
@@ -4342,15 +4391,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     }
                   />
                 )}
-
-                <TextField
-                  fullWidth
-                  label={t('admin:connections.proxyWhitelist')}
-                  value={settings.PROXY_WHITELIST || ''}
-                  onChange={(e) => setSettings(prev => ({ ...prev, PROXY_WHITELIST: e.target.value }))}
-                  sx={{ mb: 2 }}
-                  helperText={t('admin:connections.proxyHelp')}
-                />
 
                 <Button
                   type="submit"

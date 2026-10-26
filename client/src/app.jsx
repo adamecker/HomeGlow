@@ -58,6 +58,8 @@ import {
   themeTokens,
 } from './utils/themes.js';
 import { personalizationTokens } from './utils/personalize.js';
+import SaveLayoutButton from './components/SaveLayoutButton.jsx';
+import { setHouseholdChangesMode, subscribeHouseholdChanges } from './utils/householdChanges.js';
 import { updateDisplayDimming, setDimmingPaused } from './utils/displayDim.js';
 import { getServerTimezoneSync } from './utils/timezone.js';
 import { THEME_TOKENS_APPLIED_EVENT } from './utils/pluginThemeBridge.js';
@@ -779,6 +781,19 @@ const App = () => {
     return () => clearInterval(intervalId);
   }, [fetchHouseholdSettings]);
 
+  // Within seconds, once the server says household settings changed (issue
+  // #325, utils/householdChanges.js): appearance, vacation, control limits.
+  // The slow poll above stays as a safety net.
+  useEffect(() => subscribeHouseholdChanges(['settings'], () => {
+    void fetchHouseholdSettings();
+  }), [fetchHouseholdSettings]);
+
+  // A wall display checks for changes every 15 seconds; a phone only when
+  // it's opened, since nobody watches one sitting in a pocket.
+  useEffect(() => {
+    setHouseholdChangesMode(isMobile ? 'visible' : 'interval');
+  }, [isMobile]);
+
   // Recovery for a PIN check that never landed.
   //
   // While adminPinExists is unresolved, every display that remembers the PIN is
@@ -1490,7 +1505,13 @@ const App = () => {
             🏖️ Vacation Mode
           </Box>
         )}
-        <UpdateIndicator />
+        {/* Its corner is the Save Layout button's while the layout is
+            unlocked, which is never for long. */}
+        {widgetsLocked && <UpdateIndicator />}
+        {/* Move/Resize ends here, not back in the dock (issue #333). */}
+        {!isMobile && !widgetsLocked && !showAdminPanel && !screensaverActive && (
+          <SaveLayoutButton onSave={toggleWidgetsLock} />
+        )}
         {/* The one mobile/kiosk fork (issue #118): below 600px the grid —
             react-grid-layout, drag/resize, lock — never mounts. */}
         {isMobile && mobileWidgets.length > 0 && (
@@ -1662,6 +1683,8 @@ const App = () => {
               onTabChange={handleScreensaverTabChange}
               keepScreenAwake={screensaverSettings.keepScreenAwake}
               photoLayout={screensaverSettings.photoLayout}
+              coffeeTableSeconds={screensaverSettings.coffeeTableSeconds}
+              photoDetails={screensaverSettings.photoDetails}
               overlay={{
                 calendar: screensaverSettings.overlayCalendar,
                 calendarDays: screensaverSettings.overlayCalendarDays,

@@ -138,17 +138,19 @@ function poke() {
 }
 
 // A plugin frame reporting use (see server/utils/pluginFrameTouch.js).
-// The message carries nothing sensitive, and plugins are household
-// installed, so the type alone is enough to count it as activity.
+// Only from a frame on this page, like every other plugin message since
+// #320: the worst another window could do is keep the screen bright, but
+// there's no reason to let it.
 function onPluginActivity(event) {
-  if (event?.data?.type === 'homeglow:activity') poke();
+  if (event?.data?.type !== 'homeglow:activity') return;
+  const fromFrame = [...document.querySelectorAll('iframe')].some((frame) => frame.contentWindow === event.source);
+  if (fromFrame) poke();
 }
 
 // Apply the resolved appearance dimming, live. `timeZone` is the household
 // zone for the night window; once set it sticks until a new one arrives.
 // Saving in Admin counts as activity, so a freshly enabled dimming never
 // fires instantly.
-
 // FORK ONLY (prod): kiosk URL overrides, restored for this household's
 // touchscreen. Upstream dropped these in the #334 rework (a kiosk launch
 // URL has no business steering settings upstream), but this display's
@@ -211,7 +213,6 @@ export function setDimmingPaused(paused) {
     lastActivity = Date.now();
   }
 }
-
 
 // FORK ONLY (prod): pixel shift against LCD image persistence. The wall
 // panel shows a largely static dashboard 24/7; nudging the whole app a

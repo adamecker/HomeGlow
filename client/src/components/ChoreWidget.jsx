@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 import LoadingBackdrop from './LoadingBackdrop';
 import PinModal from './PinModal';
 import { API_BASE_URL } from '../utils/apiConfig.js';
+import { editWholeNumber, savedWholeNumber } from '../utils/wholeNumberField.js';
 import { pinErrorText } from '../utils/pinErrors.js';
 import { getDeviceApiBase } from '../utils/deviceName.js';
 import { fetchPinRemembered, setPinRemembered, shouldPromptForPin } from '../utils/adminPinDevice.js';
@@ -45,6 +46,7 @@ import { filterVisibleUsers, toggleHiddenUserId, pruneHiddenUserIds } from '../u
 import { isControlHidden } from '../utils/displayControls.js';
 import { subscribePluginEvents } from '../utils/pluginEventBridge.js';
 import { subscribePluginDataChanged } from '../utils/pluginDataBridge.js';
+import { subscribeHouseholdChanges } from '../utils/householdChanges.js';
 import { playSound, soundUrl } from '../utils/choreSound.js';
 import { formatTime } from '../utils/dateUtils.js';
 import PrizeCelebration from './PrizeCelebration.jsx';
@@ -105,6 +107,8 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
   // without this, a slow reload landing after a newer one could settle a
   // row in the wrong state or flicker it through the pre-tap value.
   const loadSeqRef = useRef(0);
+  // The newest load, for an overtaken one to wait on.
+  const latestLoadRef = useRef(Promise.resolve());
   // The last WEEK_DAYS days of history, only while the 7-day row is on.
   const [weekHistory, setWeekHistory] = useState([]);
   const [vacation, setVacation] = useState(null);
@@ -303,6 +307,15 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
     });
   }, []);
 
+  // Another display, a phone or the nightly job changed something this widget
+  // shows (issue #325): reload all of it, one batched load. The guard in
+  // fetchData keeps a reload that lands mid-tap from flickering the row.
+  const fetchDataRef = useRef(null);
+  fetchDataRef.current = () => fetchData();
+  useEffect(() => subscribeHouseholdChanges(['chores', 'users', 'prizes', 'settings'], () => {
+    fetchDataRef.current();
+  }), []);
+
   // Prize redemptions celebrate on every display showing the chore widget:
   // the approval emits prize.redeemed on the server bus, delivered over the
   // same SSE stream the plugin platform uses. Confetti + a chime (chime only
@@ -426,8 +439,15 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
   // it too. The individual fetchers stay for targeted callers (prize
   // redemptions, week toggles); this is only the full-load path. Sources
   // stay independent: one failing must not wipe out the rest.
-  const fetchData = async () => {
-    const seq = ++loadSeqRef.current;
+  // Resolves once the newest load has applied, so a caller that awaits it
+  // (a tap clearing its override) never sees state older than its own write.
+  const fetchData = () => {
+    const load = loadAll(++loadSeqRef.current);
+    latestLoadRef.current = load;
+    return load;
+  };
+
+  const loadAll = async (seq) => {
     const names = ['users', 'chores', 'schedules', 'history', 'prizes', 'prize offers', 'settings'];
     try {
       const today = getTodayDateString();
@@ -443,7 +463,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
       // A newer load started while this one was in flight: its results are
       // at least as fresh, so this one's are dropped wholesale rather than
       // partially applied over them.
-      if (seq !== loadSeqRef.current) return;
+      if (seq !== loadSeqRef.current) return latestLoadRef.current;
       results.forEach((result, i) => {
         if (result.status === 'rejected') {
           console.error(`Error fetching ${names[i]}:`, result.reason);
@@ -726,9 +746,8 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
       // clearing the override before the reload returns flickers the row
       // through its pre-tap state. The reload is one render now that the
       // load is batched, so it costs no more than the selective refresh
-      // did. Clearing after the reload is safe even if a newer load
-      // overtook this one — the guard drops the stale results, and the
-      // newer load read server state from after this POST. The
+      // did. If a newer load overtakes this one, fetchData waits for that
+      // load to apply, which read server state from after this POST. The
       // celebration effect watches history, so it still fires only on
       // confirmed data.
       await fetchData();
@@ -1016,7 +1035,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
       const choreResponse = await axios.post(`${API_BASE_URL}/api/chores`, {
         title: newChore.title,
         description: newChore.description,
-        clam_value: newChore.clam_value,
+        clam_value: savedWholeNumber(newChore.clam_value),
         icon: newChore.icon
       });
 
@@ -1998,7 +2017,7 @@ const ChoreWidget = ({ refreshNonce = 0, hiddenControls = [] }) => {
               type="number"
               label={t('chores:add.clamValue')}
               value={newChore.clam_value}
-              onChange={(e) => setNewChore({ ...newChore, clam_value: parseInt(e.target.value) || 0 })}
+              onChange={(e) => setNewChore({ ...newChore, clam_value: editWholeNumber(e.target.value) })}
             />
           </DialogContent>
           <DialogActions>

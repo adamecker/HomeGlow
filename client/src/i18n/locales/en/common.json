@@ -48,6 +48,13 @@
     "householdDefault": "Household default",
     "householdDefaultHelper": "New displays start in this language until they choose their own."
   },
+  "layout": {
+    "save": "Save layout"
+  },
+  "photoDetails": {
+    "morePeople_one": "{{count}} other",
+    "morePeople_other": "{{count}} others"
+  },
   "screensaverOverlay": {
     "today": "Today",
     "tomorrow": "Tomorrow",
