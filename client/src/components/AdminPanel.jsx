@@ -2945,8 +2945,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
           <CardContent>
             <AppearanceSettings />
 
-            <DisplayDimmingSettings />
-
             <ThemeLibrary />
           </CardContent>
         </Card>
@@ -3083,6 +3081,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     </Alert>
                   )}
 
+                  <Divider sx={{ my: 3 }} />
+
                   {/* Touch gestures (utils/twoFingerSwipe.js). Saved with the
                       screensaver settings. */}
                   <Typography variant="subtitle2" sx={{ mt: 1, mb: 1, fontWeight: 'bold' }}>
@@ -3113,6 +3113,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     {t('admin:screensaver.blockPinchZoomHelp')}
                   </Typography>
 
+                  <Divider sx={{ my: 3 }} />
+
                   {/* Expanding widgets (utils/widgetExpand.js). Saved with the
                       screensaver settings. The list offers the widgets turned
                       on here. */}
@@ -3142,6 +3144,13 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   >
                     {t('admin:thisDisplay.save')}
                   </Button>
+
+                  <Divider sx={{ my: 3 }} />
+
+                  {/* Display dimming (DisplayDimmingSettings), moved here whole
+                      from the Look tab: it saves only its own field, through
+                      its own save button, so it keeps working unchanged. */}
+                  <DisplayDimmingSettings />
                 </Box>
               </>
             )}

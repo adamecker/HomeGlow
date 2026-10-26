@@ -71,6 +71,71 @@ let shield = null;
 let started = false;
 let adminPaused = false;
 
+// Pixel shift against image persistence on always-on displays: nudge
+// the whole dashboard a few pixels on a slow cycle, so static elements
+// never sit on the exact same pixels. 4px / 4 minutes is the optimum in
+// Samsung's signage manuals (range 0-4px, 1-4 min); Philips shifts up to
+// 8px every 80 seconds — the same order of magnitude. Slow eased drift,
+// via relative left/top offsets on #root — never a transform: a transform
+// would make #root the containing block for its position:fixed descendants
+// (dock, screensaver, theme scene) and give it its own stacking context,
+// while relative offsets leave every fixed layer viewport-anchored. A
+// positive-x step would widen the page, so horizontal overflow is hidden
+// on <body> while the shift is on. The dim shield lives on <body> outside
+// #root, so it stays viewport-fixed. Off by default; enabled per display
+// or household in the dimming card.
+export const PIXEL_SHIFT_OFFSETS = [
+  { x: 0, y: 0 },
+  { x: 4, y: 3 },
+  { x: -3, y: 4 },
+  { x: -4, y: -2 },
+  { x: 3, y: -4 },
+];
+export const PIXEL_SHIFT_INTERVAL_MS = 4 * 60 * 1000;
+
+export function pixelShiftOffset(step) {
+  const n = PIXEL_SHIFT_OFFSETS.length;
+  return PIXEL_SHIFT_OFFSETS[((step % n) + n) % n];
+}
+
+let pixelShiftStep = 0;
+let pixelShiftSeconds = 0;
+function applyPixelShift() {
+  if (typeof document === 'undefined') return;
+  const root = document.getElementById('root');
+  if (!root || !root.style) return;
+  pixelShiftStep += 1;
+  const { x, y } = pixelShiftOffset(pixelShiftStep);
+  root.style.position = 'relative';
+  root.style.transition = 'left 1.5s ease, top 1.5s ease';
+  root.style.left = `${x}px`;
+  root.style.top = `${y}px`;
+  // The dock is fixed, so #root's offset doesn't move it, yet it's the most
+  // static thing on a wall display. It reads the same offset from these.
+  document.documentElement?.style?.setProperty?.('--pixel-shift-x', `${x}px`);
+  document.documentElement?.style?.setProperty?.('--pixel-shift-y', `${y}px`);
+  if (root.dataset) root.dataset.pixelShift = 'on';
+  if (document.body) document.body.style.overflowX = 'hidden';
+}
+
+// Switching pixel shift off must leave no trace: the last offset, the
+// transition, the marker, and the overflow-x clamp all go away at once,
+// so the display is exactly as it was before the shift ran.
+function resetPixelShift() {
+  if (typeof document === 'undefined') return;
+  const root = document.getElementById('root');
+  if (root && root.style) {
+    root.style.position = '';
+    root.style.transition = '';
+    root.style.left = '';
+    root.style.top = '';
+    if (root.dataset) delete root.dataset.pixelShift;
+  }
+  document.documentElement?.style?.removeProperty?.('--pixel-shift-x');
+  document.documentElement?.style?.removeProperty?.('--pixel-shift-y');
+  if (document.body) document.body.style.overflowX = '';
+}
+
 // The live target: the night level inside the household night window, else
 // the day level.
 function liveTarget(now = new Date()) {
@@ -196,6 +261,8 @@ export function updateDisplayDimming(settings, zone) {
   if (zone !== undefined) timeZone = zone;
   lastActivity = Date.now();
   if (!started) return;
+  if (!config.pixelShift) resetPixelShift();
+  else if (document.body) document.body.style.overflowX = 'hidden';
   if (liveTarget() == null) setDimmed(false);
   else if (config.after === 0) setDimmed(true);
   else setDimmed(false);
@@ -214,46 +281,6 @@ export function setDimmingPaused(paused) {
   }
 }
 
-// FORK ONLY (prod): pixel shift against LCD image persistence. The wall
-// panel shows a largely static dashboard 24/7; nudging the whole app a
-// few pixels on a slow cycle keeps static edges off the exact same
-// pixels. Relative left/top offsets on #root, tiny, slow eased drift -
-// imperceptible in normal use. Never a transform: a transform would make
-// #root the containing block for its position:fixed descendants (dock,
-// screensaver, theme scene) and push them off screen, while relative
-// offsets leave every fixed layer viewport-anchored. A positive-x step
-// would widen the page, so horizontal overflow is hidden on <body>
-// while the shift runs. The dim shield lives on <body> outside #root,
-// so it stays viewport-fixed.
-export const PIXEL_SHIFT_OFFSETS = [
-  { x: 0, y: 0 },
-  { x: 4, y: 3 },
-  { x: -3, y: 4 },
-  { x: -4, y: -2 },
-  { x: 3, y: -4 },
-];
-export const PIXEL_SHIFT_INTERVAL_MS = 4 * 60 * 1000;
-
-export function pixelShiftOffset(step) {
-  const n = PIXEL_SHIFT_OFFSETS.length;
-  return PIXEL_SHIFT_OFFSETS[((step % n) + n) % n];
-}
-
-let pixelShiftStep = 0;
-function applyPixelShift() {
-  if (typeof document === 'undefined') return;
-  const root = document.getElementById('root');
-  if (!root || !root.style) return;
-  pixelShiftStep += 1;
-  const { x, y } = pixelShiftOffset(pixelShiftStep);
-  root.style.position = 'relative';
-  root.style.transition = 'left 1.5s ease, top 1.5s ease';
-  root.style.left = `${x}px`;
-  root.style.top = `${y}px`;
-  if (root.dataset) root.dataset.pixelShift = 'on';
-  if (document.body) document.body.style.overflowX = 'hidden';
-}
-
 export function initDisplayDim() {
   if (started) return;
   started = true;
@@ -269,10 +296,12 @@ export function initDisplayDim() {
   // its own slower cadence (counted in seconds).
   let pixelShiftSeconds = 0;
   window.setInterval(() => {
-    pixelShiftSeconds += 1;
-    if (pixelShiftSeconds * 1000 >= PIXEL_SHIFT_INTERVAL_MS) {
-      pixelShiftSeconds = 0;
-      applyPixelShift();
+    if (config.pixelShift) {
+      pixelShiftSeconds += 1;
+      if (pixelShiftSeconds * 1000 >= PIXEL_SHIFT_INTERVAL_MS) {
+        pixelShiftSeconds = 0;
+        applyPixelShift();
+      }
     }
     if (adminPaused) return;
     if (!dimmed && liveTarget() != null && Date.now() - lastActivity >= config.after * 1000) {
