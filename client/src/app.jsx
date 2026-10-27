@@ -11,6 +11,7 @@ import ScreensaverCountdown from './components/ScreensaverCountdown.jsx';
 import UpdateIndicator from './components/UpdateIndicator.jsx';
 import { API_BASE_URL } from './utils/apiConfig.js';
 import { migrateLegacyPluginStorage } from './utils/pluginLocalStore.js';
+import { pluginGridSize } from './utils/pluginGridSize.js';
 import { getDeviceApiBase, getDeviceName } from './utils/deviceName.js';
 import { refreshSubscription } from './utils/pushNotifications.js';
 import { unlockAudio } from './utils/choreSound.js';
@@ -783,8 +784,11 @@ const App = () => {
   // Within seconds, once the server says household settings changed (issue
   // #325, utils/householdChanges.js): appearance, vacation, control limits.
   // The slow poll above stays as a safety net.
+  // Layouts too: a Home Assistant panel resized in the builder is resized on
+  // every display (server/routes/haPanels.js).
   useEffect(() => subscribeHouseholdChanges(['settings'], () => {
     void fetchHouseholdSettings();
+    void fetchWidgetAssignments();
   }), [fetchHouseholdSettings]);
 
   // A wall display checks for changes every 15 seconds; a phone only when
@@ -1391,9 +1395,7 @@ const App = () => {
         // "expand": false in the manifest keeps it from being expanded.
         expandable: plugin.manifest?.expand !== false,
         defaultPosition: { x: 0, y: 0 },
-        defaultSize: { width: 6, height: 4 },
-        minWidth: 2,
-        minHeight: 2,
+        ...pluginGridSize(plugin),
         savedLayout: dbLayout,
         content: <PluginWidgetWrapper
           filename={plugin.filename}
@@ -1591,8 +1593,8 @@ const App = () => {
         // An edge for the floating panel, which can sink into a page background
         // of a similar solid color (#230). Full screen on a phone needs none.
         // The panel sets its own size (AdminShell), so it doesn't change from
-        // section to section.
-        slotProps={{ paper: { sx: isMobile ? {} : { border: '1px solid var(--card-border)', borderRadius: 4 } } }}
+        // section to section. Its corners stay MUI's own, like the fields in it.
+        slotProps={{ paper: { sx: isMobile ? {} : { border: '1px solid var(--card-border)' } } }}
       >
         <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <Suspense fallback={<Typography sx={{ p: 3 }}>Loading settings...</Typography>}>
