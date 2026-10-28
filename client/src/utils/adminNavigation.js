@@ -4,9 +4,16 @@
 //   #/admin                        — admin open, first tab
 //   #/admin/family                 — Family tab, its first section (Users)
 //   #/admin/family/chores/history  — Family tab, Chores section, History
-//   #/admin/dashboard/plugins/open/FamilyLists.html
+//   #/admin/plugins/open/FamilyLists.html
 //                                  — Plugins section, Open view for one plugin
 // No hash (or unrecognized) — admin closed.
+//
+// Exception: the Open view drops the tab segment. Every other place
+// carries its tab, but the open view's hash is #/admin/plugins/open/
+// <file> — shorter, and the only shape the panel builds for it. The
+// older dashboard-prefixed shape (#/admin/dashboard/plugins/open/
+// <file>) still parses to the same location and is canonicalized to
+// the short shape on build, so existing bookmarks keep working.
 //
 // The hash is kept current with history.replaceState, so a refresh or a
 // bookmark returns to the same place without every tab click adding a history
@@ -95,6 +102,18 @@ export function parseAdminHash(hash = window.location.hash) {
   // The filename keeps its case; the section names above do not.
   const detail = decodeSegment(match[4] || '');
 
+  // The Open view drops the tab segment: #/admin/plugins/open/<file>.
+  // 'plugins' is not a tab and 'open' is not a section, so this shape
+  // cannot collide with a normal location. It must be exactly three
+  // segments; a fourth falls through to normal parsing (and its generic
+  // fallback) below. Without a filename it is the plain Plugins list,
+  // the same rule as the dashboard-prefixed shape.
+  if (first === 'plugins' && second === 'open' && !match[4]) {
+    const file = decodeSegment(match[3] || '');
+    if (file) return normalizeAdminLocation({ tab: 'dashboard', section: 'plugins', subsection: 'open', detail: file });
+    return normalizeAdminLocation({ tab: 'dashboard', section: 'plugins' });
+  }
+
   const legacy = LEGACY_TABS[first];
   if (legacy) {
     // Old links had at most one level below the tab: chores/history.
@@ -107,8 +126,12 @@ export function parseAdminHash(hash = window.location.hash) {
 // default for its parent is left off, so "#/admin/family" rather than
 // "#/admin/family/users". A detail is always shown (the Open view has no
 // default plugin), URL-encoded so filenames with spaces round-trip.
+// The Open view drops the tab segment: #/admin/plugins/open/<file>.
 export function buildAdminHash(location) {
   const { tab, section, subsection, detail } = normalizeAdminLocation(location);
+  if (section === 'plugins' && subsection === 'open' && detail) {
+    return `#/admin/plugins/open/${encodeURIComponent(detail)}`;
+  }
   const layout = layoutFor(tab);
   const parts = [tab];
   const subsections = (section && layout.subsections?.[section]) || [];

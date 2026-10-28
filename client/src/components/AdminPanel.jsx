@@ -2042,7 +2042,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
             )}
 
             {/* Open: one installed plugin full-screen, reached from its row
-                below and by hash (#/admin/dashboard/plugins/open/<file>).
+                below and by hash (#/admin/plugins/open/<file>).
                 Same iframe construction as the live preview, at the panel
                 content's full height and with the dashboard's sandbox set:
                 the user is USING the widget here, not previewing it. Still

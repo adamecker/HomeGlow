@@ -54,17 +54,29 @@ describe('adminNavigation', () => {
     });
 
     it('reads the plugins open view, keeping the filename case', () => {
-      expect(parseAdminHash('#/admin/dashboard/plugins/open/FamilyLists.html')).toEqual(
+      expect(parseAdminHash('#/admin/plugins/open/FamilyLists.html')).toEqual(
         at('dashboard', 'plugins', 'open', 'FamilyLists.html'),
       );
       // A filename with a space round-trips through its encoding.
+      expect(parseAdminHash('#/admin/plugins/open/My%20Widget.html')).toEqual(
+        at('dashboard', 'plugins', 'open', 'My Widget.html'),
+      );
+      // The older dashboard-prefixed shape still lands on the same view.
+      expect(parseAdminHash('#/admin/dashboard/plugins/open/FamilyLists.html')).toEqual(
+        at('dashboard', 'plugins', 'open', 'FamilyLists.html'),
+      );
       expect(parseAdminHash('#/admin/dashboard/plugins/open/My%20Widget.html')).toEqual(
         at('dashboard', 'plugins', 'open', 'My Widget.html'),
       );
+      // A fourth segment after the short shape is not an open view; it
+      // falls through to normal parsing and its generic fallback.
+      expect(parseAdminHash('#/admin/plugins/open/FamilyLists.html/extra')).toEqual(at('dashboard', 'widgets'));
     });
 
     it('drops an open view without a filename, or a detail anywhere else', () => {
       // Open with no plugin is the plain Plugins list.
+      expect(parseAdminHash('#/admin/plugins/open')).toEqual(at('dashboard', 'plugins'));
+      expect(parseAdminHash('#/admin/plugins/open/')).toEqual(at('dashboard', 'plugins'));
       expect(parseAdminHash('#/admin/dashboard/plugins/open')).toEqual(at('dashboard', 'plugins'));
       expect(parseAdminHash('#/admin/dashboard/plugins/open/')).toEqual(at('dashboard', 'plugins'));
       // A detail only means something under plugins/open.
@@ -113,8 +125,8 @@ describe('adminNavigation', () => {
       expect(buildAdminHash(at('family', 'chores', 'definitions'))).toBe('#/admin/family/chores');
       expect(buildAdminHash(at('family', 'chores', 'history'))).toBe('#/admin/family/chores/history');
       expect(buildAdminHash(at('family', 'routines', 'steps'))).toBe('#/admin/family/routines/steps');
-      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'FamilyLists.html'))).toBe('#/admin/dashboard/plugins/open/FamilyLists.html');
-      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'My Widget.html'))).toBe('#/admin/dashboard/plugins/open/My%20Widget.html');
+      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'FamilyLists.html'))).toBe('#/admin/plugins/open/FamilyLists.html');
+      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'My Widget.html'))).toBe('#/admin/plugins/open/My%20Widget.html');
       expect(parseAdminHash(buildAdminHash(at('dashboard', 'plugins', 'open', 'FamilyLists.html')))).toEqual(
         at('dashboard', 'plugins', 'open', 'FamilyLists.html'),
       );
