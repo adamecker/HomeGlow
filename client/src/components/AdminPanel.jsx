@@ -96,6 +96,7 @@ import SoundPicker from './SoundPicker';
 import ControlsOnDisplay from './ControlsOnDisplay';
 import ExpandWidgetsSettings from './ExpandWidgetsSettings';
 import { frameNameFor } from '../utils/pluginLocalStore.js';
+import { buildPluginOpenSrc } from '../utils/pluginOpenSrc.js';
 import useFetchTabs from '../hooks/useFetchTabs.js';
 import { MAX_DOCK_HIDE_MINUTES, screensaverPreemptsDock } from '../utils/dockIdleHide.js';
 import useIsMobile from '../hooks/useIsMobile.js';
@@ -2072,7 +2073,23 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     // platform refuses to WRITE a device-scoped setting
                     // without it, so a plugin whose own UI saves one would
                     // fail here while working fine on the dashboard.
-                    src={`${API_BASE_URL}/widgets/${encodeURIComponent(location.detail)}?theme=${document.documentElement.getAttribute('data-theme') || 'light'}&device=${encodeURIComponent(currentDeviceName)}&lang=${i18n.language || 'en'}`}
+                    //
+                    // On a narrow viewport the shell also appends mobile=1
+                    // (buildPluginOpenSrc): the shell decides mobile context
+                    // from the viewport — the same useIsMobile() cutoff as
+                    // the dashboard phone layout, below 600px — and the
+                    // frame trusts the signal; no plugin UA-sniffing.
+                    // Desktop Open views get no mobile param, exactly as
+                    // before. The param is the mechanism only: a plugin
+                    // that ignores it renders exactly as before.
+                    src={buildPluginOpenSrc({
+                      apiBaseUrl: API_BASE_URL,
+                      filename: location.detail,
+                      theme: document.documentElement.getAttribute('data-theme') || 'light',
+                      device: currentDeviceName,
+                      lang: i18n.language || 'en',
+                      isMobile,
+                    })}
                     sandbox="allow-scripts allow-forms allow-popups"
                     allow="geolocation"
                     name={frameNameFor(location.detail)}
