@@ -1,14 +1,21 @@
 // URL hash navigation for the Admin Panel.
-// Format: #/admin/{tab}/{section}/{subsection}
+// Format: #/admin/{tab}/{section}/{subsection}[/{detail}]
 // Examples:
 //   #/admin                        — admin open, first tab
 //   #/admin/family                 — Family tab, its first section (Users)
 //   #/admin/family/chores/history  — Family tab, Chores section, History
+//   #/admin/dashboard/plugins/open/FamilyLists.html
+//                                  — Plugins section, Open view for one plugin
 // No hash (or unrecognized) — admin closed.
 //
 // The hash is kept current with history.replaceState, so a refresh or a
 // bookmark returns to the same place without every tab click adding a history
 // entry. Editing the hash by hand while the panel is open switches tabs.
+//
+// The optional fourth segment, detail, is only meaningful for the Plugins
+// Open view, where it is the plugin's filename. It is kept verbatim (not
+// lowercased): filenames are case-sensitive. Everywhere else it is null,
+// so a location is always { tab, section, subsection, detail }.
 
 // The panel's tabs, grouped by what you're managing (issue #230), each with
 // its sections in display order. The first section of each list is the one a
@@ -43,48 +50,72 @@ const LEGACY_TABS = {
 const layoutFor = (tab) => ADMIN_LAYOUT.find((entry) => entry.tab === tab) || ADMIN_LAYOUT[0];
 
 // Fill in and correct a location: an unknown tab is the first tab, an unknown
-// or missing section the tab's first, and likewise for a subsection.
-export function normalizeAdminLocation({ tab, section, subsection } = {}) {
+// or missing section the tab's first, and likewise for a subsection. The
+// Open view only exists under Plugins and only with a filename: an "open"
+// without one, or a detail anywhere else, falls back to the plain section.
+export function normalizeAdminLocation({ tab, section, subsection, detail } = {}) {
   const layout = layoutFor(tab);
   const sections = layout.sections;
   const normalSection = sections.includes(section) ? section : (sections[0] || null);
   const subsections = (normalSection && layout.subsections?.[normalSection]) || [];
   const normalSubsection = subsections.includes(subsection) ? subsection : (subsections[0] || null);
-  return { tab: layout.tab, section: normalSection, subsection: normalSubsection };
+  const normalDetail = (normalSection === 'plugins' && subsection === 'open' && typeof detail === 'string' && detail)
+    ? detail
+    : null;
+  const normalOpen = normalSection === 'plugins' && subsection === 'open' && normalDetail;
+  return {
+    tab: layout.tab,
+    section: normalSection,
+    subsection: normalOpen ? 'open' : normalSubsection,
+    detail: normalDetail,
+  };
 }
 
-// "#/admin" with up to three path segments, optionally with a trailing slash,
+// "#/admin" with up to four path segments, optionally with a trailing slash,
 // and nothing else: "#/administrator" is not the Admin Panel.
-const ADMIN_HASH = /^#\/admin(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/;
+const ADMIN_HASH = /^#\/admin(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?(?:\/([^/]+))?\/?$/;
 
 export function isAdminHash(hash = window.location.hash) {
   return ADMIN_HASH.test(hash || '');
 }
 
+function decodeSegment(part) {
+  if (!part) return '';
+  try {
+    return decodeURIComponent(part);
+  } catch (e) {
+    return part;
+  }
+}
+
 export function parseAdminHash(hash = window.location.hash) {
   const match = (hash || '').match(ADMIN_HASH);
   if (!match) return null;
-  const [first, second, third] = match.slice(1).map((part) => (part || '').toLowerCase());
+  const [first, second, third] = match.slice(1, 4).map((part) => (part || '').toLowerCase());
+  // The filename keeps its case; the section names above do not.
+  const detail = decodeSegment(match[4] || '');
 
   const legacy = LEGACY_TABS[first];
   if (legacy) {
     // Old links had at most one level below the tab: chores/history.
     return normalizeAdminLocation({ ...legacy, subsection: second });
   }
-  return normalizeAdminLocation({ tab: first, section: second, subsection: third });
+  return normalizeAdminLocation({ tab: first, section: second, subsection: third, detail });
 }
 
 // The canonical hash for a location. A section or subsection that is the
 // default for its parent is left off, so "#/admin/family" rather than
-// "#/admin/family/users".
+// "#/admin/family/users". A detail is always shown (the Open view has no
+// default plugin), URL-encoded so filenames with spaces round-trip.
 export function buildAdminHash(location) {
-  const { tab, section, subsection } = normalizeAdminLocation(location);
+  const { tab, section, subsection, detail } = normalizeAdminLocation(location);
   const layout = layoutFor(tab);
   const parts = [tab];
   const subsections = (section && layout.subsections?.[section]) || [];
   const subsectionShown = subsection && subsection !== subsections[0];
   if (section && (section !== layout.sections[0] || subsectionShown)) parts.push(section);
   if (subsectionShown) parts.push(subsection);
+  if (detail) parts.push(encodeURIComponent(detail));
   return `#/admin/${parts.join('/')}`;
 }
 

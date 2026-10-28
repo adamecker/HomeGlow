@@ -31,7 +31,7 @@ function stubWindow(initial = 'http://homeglow.local/?device=kitchen') {
   return { url, replaceState };
 }
 
-const at = (tab, section = null, subsection = null) => ({ tab, section, subsection });
+const at = (tab, section = null, subsection = null, detail = null) => ({ tab, section, subsection, detail });
 
 describe('adminNavigation', () => {
   afterEach(() => {
@@ -51,6 +51,28 @@ describe('adminNavigation', () => {
       expect(parseAdminHash('#/admin/system/about')).toEqual(at('system', 'about'));
       expect(parseAdminHash('#/admin/system/notifications')).toEqual(at('system', 'notifications'));
       expect(parseAdminHash('#/admin/displays/screensaver')).toEqual(at('displays', 'screensaver'));
+    });
+
+    it('reads the plugins open view, keeping the filename case', () => {
+      expect(parseAdminHash('#/admin/dashboard/plugins/open/FamilyLists.html')).toEqual(
+        at('dashboard', 'plugins', 'open', 'FamilyLists.html'),
+      );
+      // A filename with a space round-trips through its encoding.
+      expect(parseAdminHash('#/admin/dashboard/plugins/open/My%20Widget.html')).toEqual(
+        at('dashboard', 'plugins', 'open', 'My Widget.html'),
+      );
+    });
+
+    it('drops an open view without a filename, or a detail anywhere else', () => {
+      // Open with no plugin is the plain Plugins list.
+      expect(parseAdminHash('#/admin/dashboard/plugins/open')).toEqual(at('dashboard', 'plugins'));
+      expect(parseAdminHash('#/admin/dashboard/plugins/open/')).toEqual(at('dashboard', 'plugins'));
+      // A detail only means something under plugins/open.
+      expect(parseAdminHash('#/admin/family/chores/history/SomeFile.html')).toEqual(at('family', 'chores', 'history'));
+      expect(parseAdminHash('#/admin/dashboard/widgets/open/FamilyLists.html')).toEqual(at('dashboard', 'widgets'));
+      // A four-segment hash that is not an open view still parses (the
+      // extra segment is dropped by normalization, not by rejection).
+      expect(parseAdminHash('#/admin/a/b/c/d')).toEqual(at('dashboard', 'widgets'));
     });
 
     it('sends the names from before the regroup to their new homes (#230)', () => {
@@ -77,7 +99,7 @@ describe('adminNavigation', () => {
     });
 
     it('is null for anything that is not the Admin Panel', () => {
-      for (const hash of ['', '#', '#/', '#/photos', '#/administrator', '#/adminfoo', '#/admin/a/b/c/d', 'admin']) {
+      for (const hash of ['', '#', '#/', '#/photos', '#/administrator', '#/adminfoo', '#/admin/a/b/c/d/e', 'admin']) {
         expect(parseAdminHash(hash), hash).toBeNull();
         expect(isAdminHash(hash), hash).toBe(false);
       }
@@ -91,6 +113,11 @@ describe('adminNavigation', () => {
       expect(buildAdminHash(at('family', 'chores', 'definitions'))).toBe('#/admin/family/chores');
       expect(buildAdminHash(at('family', 'chores', 'history'))).toBe('#/admin/family/chores/history');
       expect(buildAdminHash(at('family', 'routines', 'steps'))).toBe('#/admin/family/routines/steps');
+      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'FamilyLists.html'))).toBe('#/admin/dashboard/plugins/open/FamilyLists.html');
+      expect(buildAdminHash(at('dashboard', 'plugins', 'open', 'My Widget.html'))).toBe('#/admin/dashboard/plugins/open/My%20Widget.html');
+      expect(parseAdminHash(buildAdminHash(at('dashboard', 'plugins', 'open', 'FamilyLists.html')))).toEqual(
+        at('dashboard', 'plugins', 'open', 'FamilyLists.html'),
+      );
       expect(buildAdminHash(at('system', 'about'))).toBe('#/admin/system/about');
       expect(buildAdminHash(at('system', 'notifications'))).toBe('#/admin/system/notifications');
 
