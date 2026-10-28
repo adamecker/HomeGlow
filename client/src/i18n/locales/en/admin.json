@@ -169,6 +169,8 @@
     "noDescription": "No description provided",
     "showPreview": "Preview",
     "hidePreview": "Hide preview",
+    "open": "Open",
+    "openTitle": "Open {{name}}",
     "previewTitle": "Live preview of {{name}}",
     "noneInstalled": "No plugins installed yet. Install one from the repository above, or upload your own.",
     "enlargePreview": "See a larger preview of {{name}}",

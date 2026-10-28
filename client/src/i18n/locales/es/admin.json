@@ -169,6 +169,8 @@
     "noDescription": "Sin descripción",
     "showPreview": "Vista previa",
     "hidePreview": "Ocultar vista previa",
+    "open": "Abrir",
+    "openTitle": "Abrir {{name}}",
     "previewTitle": "Vista previa en vivo de {{name}}",
     "noneInstalled": "Todavía no hay complementos instalados. Instala uno desde el repositorio de arriba o sube el tuyo.",
     "enlargePreview": "Ver una vista previa más grande de {{name}}",
