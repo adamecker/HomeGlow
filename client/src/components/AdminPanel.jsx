@@ -76,7 +76,6 @@ import PinModal from './PinModal';
 import ChoreSchedulesTab from './ChoreSchedulesTab';
 import ChoreHistoryTab from './ChoreHistoryTab';
 import NotificationsTab from './NotificationsTab';
-import RoutinesTab from './RoutinesTab';
 import TabIconModal from './TabIconModal';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
 import AdminFormSection from './AdminFormSection';
@@ -3536,15 +3535,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
             </>
           )}
         </>
-      )}
-
-      {/* Routines: steps a child ticks off, each routine one chore (its own
-          module; its cards are ticked in the Chores widget). */}
-      {location.section === 'routines' && (
-        <RoutinesTab
-          subsection={location.subsection}
-          setSaveMessage={setSaveMessage}
-        />
       )}
 
       {location.section === 'prizes' && (

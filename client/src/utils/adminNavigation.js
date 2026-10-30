@@ -33,8 +33,8 @@ export const ADMIN_LAYOUT = [
   { tab: 'displays', sections: ['devices', 'screensaver', 'thisdisplay'] },
   {
     tab: 'family',
-    sections: ['users', 'chores', 'routines', 'prizes', 'vacation'],
-    subsections: { chores: ['definitions', 'history', 'settings'], routines: ['routines', 'steps'] },
+    sections: ['users', 'chores', 'prizes', 'vacation'],
+    subsections: { chores: ['definitions', 'history', 'settings'] },
   },
   { tab: 'security', sections: [] },
   { tab: 'system', sections: ['region', 'connections', 'notifications', 'about'] },
@@ -52,6 +52,12 @@ const LEGACY_TABS = {
   prizes: { tab: 'family', section: 'prizes' },
   connections: { tab: 'system', section: 'connections' },
   about: { tab: 'system', section: 'about' },
+};
+
+// Sections folded into another, by tab: Family → Routines (and its Steps)
+// now live on Family → Chores, with the chore definitions and schedules.
+const MOVED_SECTIONS = {
+  family: { routines: { section: 'chores' } },
 };
 
 const layoutFor = (tab) => ADMIN_LAYOUT.find((entry) => entry.tab === tab) || ADMIN_LAYOUT[0];
@@ -119,6 +125,8 @@ export function parseAdminHash(hash = window.location.hash) {
     // Old links had at most one level below the tab: chores/history.
     return normalizeAdminLocation({ ...legacy, subsection: second });
   }
+  const moved = MOVED_SECTIONS[first]?.[second];
+  if (moved) return normalizeAdminLocation({ tab: first, ...moved });
   return normalizeAdminLocation({ tab: first, section: second, subsection: third, detail });
 }
 
