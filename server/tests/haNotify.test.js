@@ -86,8 +86,8 @@ function setup({ refuse = () => false } = {}) {
     INSERT INTO chores (id, title) VALUES (10, 'Feed the cat');
     INSERT INTO devices (name) VALUES ('Mom phone');
   `);
-  migrate(db, 'schema33-deviceNotifications.js', 33);
-  migrate(db, 'schema34-notificationChannels.js', 34);
+  migrate(db, 'schema39-deviceNotifications.js', 39);
+  migrate(db, 'schema40-notificationChannels.js', 40);
 
   const state = { connected: true, listed: SERVICES };
   const calls = [];

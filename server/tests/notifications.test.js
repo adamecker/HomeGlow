@@ -9,7 +9,7 @@ const {
   NOTIFICATION_EVENTS, createNotifier, isPushServiceEndpoint, parseSubscription,
 } = require('../services/notifications');
 
-const MIGRATION = path.resolve(__dirname, '../migrations/schema33-deviceNotifications.js');
+const MIGRATION = path.resolve(__dirname, '../migrations/schema39-deviceNotifications.js');
 
 function freshDb() {
   const db = new Database(':memory:');
@@ -28,7 +28,7 @@ function freshDb() {
     INSERT INTO routines (name, chore_id) VALUES ('Morning', 12);
     INSERT INTO devices (name) VALUES ('Mom phone'), ('Dad phone'), ('Kitchen');
   `);
-  globalThis.__HOMEGLOW_SCHEMA_MIGRATION_CONTEXT = { db, schemaIdKey: 'schema_id', targetSchemaId: 33 };
+  globalThis.__HOMEGLOW_SCHEMA_MIGRATION_CONTEXT = { db, schemaIdKey: 'schema_id', targetSchemaId: 39 };
   delete require.cache[MIGRATION];
   require(MIGRATION);
   delete globalThis.__HOMEGLOW_SCHEMA_MIGRATION_CONTEXT;
