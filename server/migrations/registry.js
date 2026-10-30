@@ -48,4 +48,5 @@ module.exports = [
   { schemaId: 40, migrationPath: './migrations/schema40-notificationChannels', },
   { schemaId: 41, migrationPath: './migrations/schema41-proxyWhitelistSeed', },
   { schemaId: 42, migrationPath: './migrations/schema42-prizeDescription', },
+  { schemaId: 43, migrationPath: './migrations/schema43-photoDetails', },
 ];
