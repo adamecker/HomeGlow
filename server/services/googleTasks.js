@@ -464,15 +464,17 @@ async function syncUserGoogleTasks(db, userId) {
 async function syncAllGoogleTasks(db) {
   const accounts = db.prepare('SELECT user_id FROM user_google_tasks_accounts').all();
   let totalImported = 0;
+  let totalUpdated = 0;
   for (const acc of accounts) {
     try {
       const res = await syncUserGoogleTasks(db, acc.user_id);
       totalImported += res.imported;
+      totalUpdated += res.updated;
     } catch (err) {
       console.warn(`[GoogleTasks] Sync error for user ${acc.user_id}:`, err.message);
     }
   }
-  return { totalUsers: accounts.length, totalImported };
+  return { totalUsers: accounts.length, totalImported, totalUpdated };
 }
 
 module.exports = {

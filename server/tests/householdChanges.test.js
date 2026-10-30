@@ -8,6 +8,7 @@ test('a successful write moves the kinds of data its route touches', () => {
   assert.deepEqual(domainsForRequest('PATCH', '/api/chore-schedules/:id', 200), ['chores', 'users']);
   assert.deepEqual(domainsForRequest('POST', '/api/routines/:id/steps/:stepId', 200), ['chores', 'users']);
   assert.deepEqual(domainsForRequest('POST', '/api/users/:id/clams/add', 200), ['users']);
+  assert.deepEqual(domainsForRequest('POST', '/api/users/:id/google-tasks/sync', 200), ['chores', 'users']);
   assert.deepEqual(domainsForRequest('POST', '/api/prize-offers/:id/approve', 200), ['prizes', 'users']);
   assert.deepEqual(domainsForRequest('POST', '/api/settings', 200), ['settings']);
   assert.deepEqual(domainsForRequest('PUT', '/api/timezone', 200), ['settings']);

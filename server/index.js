@@ -6095,8 +6095,11 @@ button:hover{background:#1d4ed8}</style></head>
       return renderTasksPage('Authorization failed', 'Missing code or state parameter.', false);
     }
     const result = await googleTasks.handleOAuthCallback(db, { code, state });
-    // Trigger immediate sync upon connecting
-    googleTasks.syncUserGoogleTasks(db, result.userId).catch(() => {});
+    // Trigger immediate sync upon connecting. Like the periodic job, it
+    // writes without a request, so bump when it changed chore data.
+    googleTasks.syncUserGoogleTasks(db, result.userId).then((syncResult) => {
+      if (syncResult.imported + syncResult.updated > 0) householdChanges.bump('chores', 'users');
+    }).catch(() => {});
     return renderTasksPage('Connected Google Tasks', `Signed in as ${result.email || 'your Google account'}. You can close this window.`, true);
   } catch (error) {
     console.error('Google Tasks OAuth callback error:', error);
@@ -7618,7 +7621,13 @@ const start = async () => {
       // Periodic 15-minute background sync for connected Google Tasks
       setInterval(async () => {
         try {
-          await googleTasks.syncAllGoogleTasks(db);
+          const result = await googleTasks.syncAllGoogleTasks(db);
+          // Written without a request, so the displays are told here
+          // (nightly-job precedent): without this bump, the chores widget
+          // never learns a Google-side change until a manual refresh.
+          if (result.totalImported + result.totalUpdated > 0) {
+            householdChanges.bump('chores', 'users');
+          }
         } catch (taskErr) {
           console.error('[GoogleTasks:Periodic] Error during sync:', taskErr.message);
         }

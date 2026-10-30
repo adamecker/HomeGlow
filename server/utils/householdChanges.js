@@ -24,6 +24,10 @@ const DOMAINS = Object.freeze(['chores', 'users', 'prizes', 'settings', 'calenda
 // and a prize redemption both move clam totals, which are user data.
 const ROUTE_DOMAINS = [
   [/^\/api\/(chores|chore-schedules|chore-history|routines|routine-steps)(\/|$)/, ['chores', 'users']],
+  // A manual Google Tasks sync rewrites chore data, so it moves chores as
+  // well as users. It must come before the generic /api/users entry below
+  // (first match wins).
+  [/^\/api\/users\/:id\/google-tasks\/sync$/, ['chores', 'users']],
   [/^\/api\/users(\/|$)/, ['users']],
   [/^\/api\/(prizes|prize-offers)(\/|$)/, ['prizes', 'users']],
   [/^\/api\/(settings|timezone|themes|appearance|sounds)(\/|$)/, ['settings']],
