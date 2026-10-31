@@ -95,6 +95,7 @@ const axios = require('axios');
 const ICAL = require('ical.js');
 const { CronExpressionParser } = require('cron-parser');
 const { cronFiresOnDate } = require('./utils/cronDay');
+const anyDayChores = require('./services/anyDayChores');
 const choreExpiry = require('./utils/choreExpiry');
 const cron = require('node-cron');
 // For widget upload and registry
@@ -261,7 +262,8 @@ const SYSTEM_SCHEMA_ID_KEY = 'SYSTEM_SCHEMA_ID';
 
 const schemaMigrations = require('./migrations/registry');
 
-const ALLOWED_SCHEDULE_DURATIONS = new Set(['day-of', 'until-completed', 'once-completed']);
+// 'any-day': once in a period, any day of it (services/anyDayChores.js).
+const ALLOWED_SCHEDULE_DURATIONS = new Set(['day-of', 'until-completed', 'once-completed', 'any-day']);
 const SCHEDULE_INTERVAL_REGEX = /^([1-9]\d*)([dwmy])$/;
 
 // Fisher-Yates in-place shuffle. Mutates and returns the array.
@@ -2330,11 +2332,16 @@ async function applySchemaMigrations(currentSchemaId) {
   }
 }
 
-// Sticky schedules (until-completed, once-completed) are never shown on the
-// dashboard themselves: on a day one fires it gets a visible one-time child,
-// and that is what appears and is completed. This creates today's child for
-// each sticky parent that fires on `today` and has no open child yet, and
-// returns the children it created.
+// Sticky schedules (until-completed, once-completed, any-day) are never shown
+// on the dashboard themselves: on a day one fires it gets a visible one-time
+// child, and that is what appears and is completed. This creates today's
+// child for each sticky parent that fires on `today` and has no open child
+// yet, and returns the children it created.
+//
+// An any-day parent "fires" on any day of a period that isn't done yet, so
+// one set up mid-week shows at once, and a weekly one done on Wednesday
+// doesn't come back until Sunday. Its child is due by the period's last day
+// (services/anyDayChores.js).
 //
 // The nightly job runs it for every schedule. Creating or editing a schedule
 // runs it for that one (`scheduleIds`), so a chore set up during the day
@@ -2351,7 +2358,7 @@ function spawnStickyChildren(today, scheduleIds = null) {
            cs.expire_minutes
     FROM chore_schedules cs
     WHERE cs.crontab IS NOT NULL
-      AND cs.duration IN ('until-completed', 'once-completed')
+      AND cs.duration IN ('until-completed', 'once-completed', 'any-day')
       AND cs.visible = 1
       ${onlyThese}
       AND NOT EXISTS (
@@ -2372,11 +2379,27 @@ function spawnStickyChildren(today, scheduleIds = null) {
       )
   `).all(...(Array.isArray(scheduleIds) ? scheduleIds : []));
 
+  // Done this period: a completion on this any-day parent or one of its
+  // cards. A cleared card's rows are moved to the parent (nightly cleanup).
+  const doneThisPeriod = db.prepare(`
+    SELECT 1 FROM chore_history ch
+    JOIN chore_schedules s ON s.id = ch.chore_schedule_id
+    WHERE (s.id = ? OR s.parent_schedule_id = ?)
+      AND ch.kind = 'completion'
+      AND ch.date BETWEEN ? AND ?
+    LIMIT 1
+  `);
+
   const created = [];
   for (const schedule of stickyParentSchedules) {
+    const period = schedule.duration === anyDayChores.ANY_DAY
+      ? anyDayChores.periodOf(today, schedule.interval, schedule.created_at)
+      : null;
     let firesToday;
     try {
-      firesToday = cronFiresOnDate(schedule.crontab, today);
+      firesToday = period
+        ? !doneThisPeriod.get(schedule.id, schedule.id, period.start, today)
+        : cronFiresOnDate(schedule.crontab, today);
     } catch (parseError) {
       console.warn(`Skipping sticky schedule ${schedule.id} due to invalid crontab: ${schedule.crontab}`);
       continue;
@@ -2384,9 +2407,11 @@ function spawnStickyChildren(today, scheduleIds = null) {
     if (!firesToday) continue;
 
     const dueDateOffset = calculateDateOffsetDays(schedule.created_at, schedule.due_date);
-    const childDueDate = dueDateOffset === null
-      ? (schedule.due_date || null)
-      : addDaysToDateOnly(today, dueDateOffset);
+    const childDueDate = period
+      ? period.end
+      : dueDateOffset === null
+        ? (schedule.due_date || null)
+        : addDaysToDateOnly(today, dueDateOffset);
 
     created.push(db.prepare(`
       INSERT INTO chore_schedules (
@@ -2462,23 +2487,37 @@ async function dailyBackgroundProcessing() {
     // We want to delete schedules that are completed and will never run again to avoid clutter.
     // kind = 'completion' is load-bearing (issue #72): a 'missed' row must not
     // make an UNcompleted one-time chore look completed and get it pruned.
+    //
+    // An any-day chore's card goes once its period is over, done or not: the
+    // next period starts fresh, and an undone one was logged as one miss on
+    // its last day, above (services/anyDayChores.js).
     const schedulesToPrune = db.prepare(`
-      SELECT cs.id, cs.chore_id, cs.user_id, c.title
+      SELECT cs.id, cs.chore_id, cs.user_id, cs.parent_schedule_id, c.title
       FROM chore_schedules cs
       JOIN chores c ON cs.chore_id = c.id
+      LEFT JOIN chore_schedules ps ON ps.id = cs.parent_schedule_id
       WHERE cs.crontab IS NULL
         AND cs.visible = 1
-        AND EXISTS (
-          SELECT 1 FROM chore_history ch
-          WHERE ch.chore_schedule_id = cs.id
-            AND ch.kind = 'completion'
+        AND (
+          EXISTS (
+            SELECT 1 FROM chore_history ch
+            WHERE ch.chore_schedule_id = cs.id
+              AND ch.kind = 'completion'
+          )
+          OR (ps.duration = 'any-day' AND cs.due_date IS NOT NULL AND cs.due_date < ?)
         )
-    `).all();
+    `).all(today);
     console.log(`Found ${schedulesToPrune.length} completed one-time chores to prune`);
+
+    // A sticky chore's card keeps its history with the chore: the rows move
+    // to the schedule it came from before it goes, rather than losing their
+    // schedule (and so their chore) to ON DELETE SET NULL. The board's week
+    // calendar and the card's last-7-days row read them by chore.
+    const keepHistory = db.prepare('UPDATE OR IGNORE chore_history SET chore_schedule_id = ? WHERE chore_schedule_id = ?');
 
     let prunedScheduleCount = 0;
     for (const schedule of schedulesToPrune) {
-
+      if (schedule.parent_schedule_id) keepHistory.run(schedule.parent_schedule_id, schedule.id);
       db.prepare('DELETE FROM chore_schedules WHERE id = ?').run(schedule.id);
       console.log(`Pruned schedule ID ${schedule.id}: "${schedule.title}" (user_id: ${schedule.user_id})`);
       prunedScheduleCount++;
@@ -3195,10 +3234,15 @@ fastify.get('/api/chore-schedules', async (request, reply) => {
     // followup_of: the chore whose completion handed this one on, for the
     // "after Run the dishwasher" caption in the widget (issue #241).
     // routine_id: a schedule of a routine's chore (see /api/routines/today).
-    let query = 'SELECT cs.*, c.title, c.description, c.clam_value, c.icon, tc.title AS followup_of, rt.id AS routine_id ' +
+    // parent_duration: a sticky chore's card says what its schedule is, so
+    // the widget can tell an any-day chore's card (due its period's last
+    // day) apart.
+    let query = 'SELECT cs.*, c.title, c.description, c.clam_value, c.icon, tc.title AS followup_of, rt.id AS routine_id, ' +
+      'ps.duration AS parent_duration ' +
       'FROM chore_schedules cs JOIN chores c ON cs.chore_id = c.id ' +
       'LEFT JOIN chore_followups fr ON fr.id = cs.followup_rule_id LEFT JOIN chores tc ON tc.id = fr.chore_id ' +
-      'LEFT JOIN routines rt ON rt.chore_id = cs.chore_id';
+      'LEFT JOIN routines rt ON rt.chore_id = cs.chore_id ' +
+      'LEFT JOIN chore_schedules ps ON ps.id = cs.parent_schedule_id';
     const conditions = [];
     const params = [];
 
@@ -3213,8 +3257,8 @@ fastify.get('/api/chore-schedules', async (request, reply) => {
     if (usage !== undefined && usage === 'chart') {
       conditions.push('cs.visible = ?');
       params.push(1);
-      conditions.push('(cs.duration IS NULL OR cs.duration NOT IN (?, ?))');
-      params.push('until-completed', 'once-completed');
+      conditions.push('(cs.duration IS NULL OR cs.duration NOT IN (?, ?, ?))');
+      params.push(...anyDayChores.STICKY_DURATIONS);
     }
     if (chore_id !== undefined) {
       conditions.push('cs.chore_id = ?');
@@ -3279,7 +3323,11 @@ function resolveScheduleUsers(body) {
 }
 
 fastify.post('/api/chore-schedules', async (request, reply) => {
-  const { chore_id, crontab, duration, visible, interval, parent_schedule_id, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze, snoozed_until } = request.body;
+  const { chore_id, visible, parent_schedule_id, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze, snoozed_until } = request.body;
+  // 'weekly', and an any-day chore with no period, are any-day every week;
+  // an any-day chore's days mean nothing (services/anyDayChores.js).
+  const { duration, interval } = anyDayChores.normalizeAnyDay(request.body.duration, request.body.interval);
+  const crontab = duration === anyDayChores.ANY_DAY ? anyDayChores.ANY_DAY_CRONTAB : request.body.crontab;
   try {
     if (!chore_id) {
       return reply.status(400).send({ error: 'chore_id is required' });
@@ -3309,8 +3357,12 @@ fastify.post('/api/chore-schedules', async (request, reply) => {
       if (!isValidScheduleInterval(normalizedInterval)) {
         return reply.status(400).send({ error: 'once-completed schedules require a valid interval like 30d, 3w, 2m, or 1y' });
       }
+    } else if (normalizedDuration === anyDayChores.ANY_DAY) {
+      if (!anyDayChores.isPeriod(normalizedInterval)) {
+        return reply.status(400).send({ error: `any-day schedules need a period: ${anyDayChores.PERIODS.join(', ')}` });
+      }
     } else if (normalizedInterval !== null) {
-      return reply.status(400).send({ error: 'interval is only allowed for once-completed schedules' });
+      return reply.status(400).send({ error: 'interval is only allowed for once-completed and any-day schedules' });
     }
 
     if (crontab) {
@@ -3348,7 +3400,7 @@ fastify.post('/api/chore-schedules', async (request, reply) => {
       crontab || null,
       normalizedDuration,
       visible !== undefined ? visible : 1,
-      normalizedDuration === 'once-completed' ? normalizedInterval : null,
+      ['once-completed', anyDayChores.ANY_DAY].includes(normalizedDuration) ? normalizedInterval : null,
       normalizedParentScheduleId,
       dueTimeResult.value,
       sound || null,
@@ -3411,7 +3463,13 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
   const scheduleChore = db.prepare('SELECT chore_id FROM chore_schedules WHERE id = ?').get(id);
   const owner = scheduleChore && routineOwning(scheduleChore.chore_id);
   if (owner && ROUTINE_SCHEDULE_FIELDS.some((field) => request.body?.[field] !== undefined)) return refuseRoutineEdit(reply, owner);
-  const { chore_id, user_id, crontab, duration, visible, interval, parent_schedule_id, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze, snoozed_until, revoke_daily_bonus, transfer_bonus_clams, expire_minutes } = request.body;
+  const { chore_id, user_id, visible, parent_schedule_id, due_time, sound, sound_enabled, reminder_interval_minutes, due_date, transferable, can_snooze, snoozed_until, revoke_daily_bonus, transfer_bonus_clams, expire_minutes } = request.body;
+  let { crontab, duration, interval } = request.body;
+  // 'weekly' is an any-day chore every week (services/anyDayChores.js).
+  if (duration === 'weekly') {
+    duration = anyDayChores.ANY_DAY;
+    if (interval === undefined) interval = anyDayChores.DEFAULT_PERIOD;
+  }
   try {
     const dueTimeResult = normalizeDueTime(due_time);
     if (due_time !== undefined && !dueTimeResult.valid) {
@@ -3445,7 +3503,7 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       }
     }
 
-    const existingSchedule = db.prepare('SELECT id, user_id, crontab, duration, interval, snoozed_until, due_time, expire_minutes FROM chore_schedules WHERE id = ?').get(id);
+    const existingSchedule = db.prepare('SELECT id, user_id, crontab, duration, interval, snoozed_until, due_time, expire_minutes, created_at FROM chore_schedules WHERE id = ?').get(id);
     if (!existingSchedule) {
       return reply.status(404).send({ error: 'Schedule not found' });
     }
@@ -3466,6 +3524,14 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       return reply.status(400).send({ error: `Invalid duration. Expected one of: ${Array.from(ALLOWED_SCHEDULE_DURATIONS).join(', ')}` });
     }
 
+    // An any-day chore's days mean nothing; made one without a period (or
+    // from "again after done", whose interval may not be one), it's weekly.
+    if (nextDuration === anyDayChores.ANY_DAY) {
+      crontab = anyDayChores.ANY_DAY_CRONTAB;
+      if (interval === undefined && !anyDayChores.isPeriod(normalizeScheduleInterval(existingSchedule.interval))) {
+        interval = anyDayChores.DEFAULT_PERIOD;
+      }
+    }
     const nextCrontab = crontab !== undefined ? (crontab || null) : existingSchedule.crontab;
     const nextInterval = normalizeScheduleInterval(interval !== undefined ? interval : existingSchedule.interval);
     if (nextDuration === 'once-completed') {
@@ -3475,8 +3541,12 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       if (!isValidScheduleInterval(nextInterval)) {
         return reply.status(400).send({ error: 'once-completed schedules require a valid interval like 30d, 3w, 2m, or 1y' });
       }
+    } else if (nextDuration === anyDayChores.ANY_DAY) {
+      if (!anyDayChores.isPeriod(nextInterval)) {
+        return reply.status(400).send({ error: `any-day schedules need a period: ${anyDayChores.PERIODS.join(', ')}` });
+      }
     } else if (interval !== undefined && nextInterval !== null) {
-      return reply.status(400).send({ error: 'interval is only allowed for once-completed schedules' });
+      return reply.status(400).send({ error: 'interval is only allowed for once-completed and any-day schedules' });
     }
 
     const updates = [];
@@ -3488,7 +3558,7 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
     if (duration !== undefined) { updates.push('duration = ?'); params.push(nextDuration); }
     if (interval !== undefined || duration !== undefined) {
       updates.push('interval = ?');
-      params.push(nextDuration === 'once-completed' ? nextInterval : null);
+      params.push(['once-completed', anyDayChores.ANY_DAY].includes(nextDuration) ? nextInterval : null);
     }
     if (parent_schedule_id !== undefined) {
       if (parent_schedule_id === null || parent_schedule_id === '') {
@@ -3570,10 +3640,23 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       awardDailyBonusesAfterRemoval([assigneeId]);
     }
 
+    // Made any-day, or given another period: a card it already has open is
+    // this period's, due on its last day.
+    const periodChanged = nextDuration === anyDayChores.ANY_DAY
+      && (existingSchedule.duration !== anyDayChores.ANY_DAY || nextInterval !== normalizeScheduleInterval(existingSchedule.interval));
+    if ((duration !== undefined || interval !== undefined) && periodChanged) {
+      const { end } = anyDayChores.periodOf(getTodayLocalDateString(), nextInterval, existingSchedule.created_at);
+      db.prepare(`
+        UPDATE chore_schedules SET due_date = ?
+        WHERE parent_schedule_id = ? AND crontab IS NULL
+          AND NOT EXISTS (SELECT 1 FROM chore_history h WHERE h.chore_schedule_id = chore_schedules.id AND h.kind = 'completion')
+      `).run(end, id);
+    }
+
     // Made sticky, given a new timing, or shown again: if it now fires
     // today, today's chore appears at once (issue #256). An open child
     // already there is left as it is.
-    if (crontab !== undefined || duration !== undefined || visible !== undefined) {
+    if (crontab !== undefined || duration !== undefined || interval !== undefined || visible !== undefined) {
       spawnStickyChildren(getTodayLocalDateString(), [Number(id)]);
     }
 
@@ -3773,6 +3856,7 @@ function getTodaysRegularChoresForUser(userId, dateStr, referenceNow = new Date(
     SELECT cs.*,
      c.clam_value,
      c.title,
+     ps.duration AS parent_duration,
      EXISTS (
          SELECT 1
          FROM chore_history ch
@@ -3784,11 +3868,13 @@ function getTodaysRegularChoresForUser(userId, dateStr, referenceNow = new Date(
     FROM chore_schedules cs
     JOIN chores c
       ON cs.chore_id = c.id
+    LEFT JOIN chore_schedules ps
+      ON ps.id = cs.parent_schedule_id
     WHERE cs.user_id = ?
       AND cs.visible = 1
       AND NOT (
         cs.crontab IS NOT NULL
-        AND cs.duration IN ('until-completed', 'once-completed')
+        AND cs.duration IN ('until-completed', 'once-completed', 'any-day')
       )
   `).all(dateStr, userId);
 
@@ -3806,6 +3892,12 @@ function getTodaysRegularChoresForUser(userId, dateStr, referenceNow = new Date(
     // too late to be fair (issue #241). From the next day it counts like any
     // one-time chore. This drives both the daily bonus and missed logging.
     if (schedule.triggered_on && schedule.triggered_on === dateStr) {
+      continue;
+    }
+
+    // An any-day chore's card is due on its period's last day only: until
+    // then it holds back no bonus and logs no miss (services/anyDayChores.js).
+    if (schedule.parent_duration === anyDayChores.ANY_DAY && !anyDayChores.anyDayChildDueOn(schedule, dateStr)) {
       continue;
     }
 
