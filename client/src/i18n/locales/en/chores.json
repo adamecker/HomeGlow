@@ -138,6 +138,7 @@
     "invalidDate": "Enter a valid date and time to snooze until."
   },
   "prizeStore": {
+    "paused": "That prize is paused right now.",
     "title": "🛍️ Prize Store",
     "empty": "The store is empty right now. Parents can stock it from Settings → Prize Management.",
     "waitingForParent": "Waiting for a parent",
@@ -180,14 +181,11 @@
   "schedules": {
     "definitionsHeading": "Chores",
     "newChore": "New Chore",
-    "definitionsHelp": "Chore definitions hold the title, description, and clam value. Add schedules below to assign them to users with a recurrence pattern.",
+    "definitionsHelp": "Chore definitions hold the title, description, and clam value. Add schedules on the Schedules tab to assign them to users with a recurrence pattern.",
     "noChores": "No chores defined yet.",
     "noDescription": "No description",
     "clams": "Clams",
     "schedulesColumn": "Schedules",
-    "jumpSchedules": "Schedules",
-    "jumpChores": "Chores",
-    "goTo": "Go to {{section}}",
     "editChore": "Edit chore",
     "deleteChoreAndSchedules": "Delete chore and all its schedules",
     "newSchedule": "New Schedule",
@@ -195,9 +193,6 @@
     "viewSchedules": "View this chore's schedules",
     "addScheduleForChore": "Add a schedule for this chore",
     "schedulesHelp": "Schedules link chores to users and specify when they recur. A chore can have multiple schedules for different users or frequencies.",
-    "filterByUser": "Filter by User",
-    "allUsers": "All Users",
-    "unassignedBonus": "Unassigned (Bonus)",
     "filterByChore": "Filter by Chore",
     "allChores": "All Chores",
     "clearFilters": "Clear Filters",
@@ -474,9 +469,6 @@
     }
   },
   "board": {
-    "viewLabel": "Schedules view",
-    "viewByPerson": "By person",
-    "viewList": "All schedules",
     "bonusTab": "Bonus chores",
     "bonusHelp": "Bonus chores aren't anyone's until someone takes one from the dashboard, and they go back here each night.",
     "weekOf": "Week of {{date}}",
@@ -504,6 +496,7 @@
     "addTitle": "Add chores for {{name}}",
     "addToTitle": "{{timing}} · {{name}}",
     "theirTimings": "{{name}}'s schedules",
+    "orTheirTimings": "Or choose to add chores to one of the established schedules below",
     "pickDays": "Pick days",
     "next": "Next",
     "back": "Back",
@@ -672,5 +665,36 @@
     "reviewDrop": "Each one goes away at the end of its day.",
     "reviewMoves_one": "{{count}} of these already has a schedule for this person: it moves here.",
     "reviewMoves_other": "{{count}} of these already have a schedule for this person: they move here."
+  },
+  "page": {
+    "search": "Search",
+    "searchAria": "Search chores, routines and schedules",
+    "clearSearch": "Clear search",
+    "all": "All",
+    "bonus": "Bonus",
+    "personAria": "Show routines and schedules for",
+    "noMatches": "No matches here.",
+    "manageSteps": "Manage steps ({{n}})",
+    "stepPrefix": "Step:",
+    "noRoutinesHere": "No routines here."
+  },
+  "scheduleFlow": {
+    "scheduleButton": "Schedule",
+    "title": "Schedule {{chore}}",
+    "titleFor": "Schedule {{chore}} for {{name}}",
+    "whoTitle": "Who is it for?",
+    "whoInfo": "Pick one person, or several to give them all the same schedule. To give someone a different schedule, choose Next schedule at the end.",
+    "bonusHint": "No one in particular: anyone can do it",
+    "scheduled": "Scheduled: {{timing}}",
+    "reviewTitle": "Check and save",
+    "reviewKeep": "It stays until it’s done.",
+    "reviewDrop": "It goes away at the end of its day.",
+    "complete": "Complete",
+    "nextInfo": "If you’d like to schedule this chore for someone else too, with their own schedule, click Next schedule.",
+    "next": "Next schedule",
+    "savedSoFar": "Scheduled so far:",
+    "savedOne": "Saved for {{name}}: {{timing}}. Who’s next?",
+    "done_one": "Saved {{count}} schedule for {{chore}}.",
+    "done_other": "Saved {{count}} schedules for {{chore}}."
   }
 }

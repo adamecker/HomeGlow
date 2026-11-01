@@ -138,6 +138,7 @@
     "invalidDate": "Introduce una fecha y hora válidas para posponer."
   },
   "prizeStore": {
+    "paused": "Ese premio está en pausa ahora mismo.",
     "title": "🛍️ Tienda de premios",
     "empty": "La tienda está vacía. Los padres pueden llenarla desde Ajustes → Gestión de premios.",
     "waitingForParent": "Esperando a un adulto",
@@ -180,14 +181,11 @@
   "schedules": {
     "definitionsHeading": "Tareas",
     "newChore": "Nueva tarea",
-    "definitionsHelp": "Las definiciones de tareas contienen el título, la descripción y el valor en almejas. Añade programaciones abajo para asignarlas a personas con un patrón de repetición.",
+    "definitionsHelp": "Las definiciones de tareas contienen el título, la descripción y el valor en almejas. Añade programaciones en la pestaña Programaciones para asignarlas a personas con un patrón de repetición.",
     "noChores": "Aún no hay tareas definidas.",
     "noDescription": "Sin descripción",
     "clams": "Almejas",
     "schedulesColumn": "Programaciones",
-    "jumpSchedules": "Programaciones",
-    "jumpChores": "Tareas",
-    "goTo": "Ir a {{section}}",
     "editChore": "Editar tarea",
     "deleteChoreAndSchedules": "Eliminar la tarea y todas sus programaciones",
     "newSchedule": "Nueva programación",
@@ -195,9 +193,6 @@
     "viewSchedules": "Ver las programaciones de esta tarea",
     "addScheduleForChore": "Añadir una programación para esta tarea",
     "schedulesHelp": "Las programaciones vinculan tareas con personas e indican cuándo se repiten. Una tarea puede tener varias programaciones para distintas personas o frecuencias.",
-    "filterByUser": "Filtrar por persona",
-    "allUsers": "Todas las personas",
-    "unassignedBonus": "Sin asignar (extra)",
     "filterByChore": "Filtrar por tarea",
     "allChores": "Todas las tareas",
     "clearFilters": "Borrar filtros",
@@ -474,9 +469,6 @@
     }
   },
   "board": {
-    "viewLabel": "Vista de horarios",
-    "viewByPerson": "Por persona",
-    "viewList": "Todos los horarios",
     "bonusTab": "Tareas extra",
     "bonusHelp": "Las tareas extra no son de nadie hasta que alguien toma una desde el panel, y vuelven aquí cada noche.",
     "weekOf": "Semana del {{date}}",
@@ -504,6 +496,7 @@
     "addTitle": "Añadir tareas para {{name}}",
     "addToTitle": "{{timing}} · {{name}}",
     "theirTimings": "Horarios de {{name}}",
+    "orTheirTimings": "O elige uno de los horarios ya creados, abajo, para añadir las tareas",
     "pickDays": "Elige los días",
     "next": "Siguiente",
     "back": "Atrás",
@@ -672,5 +665,36 @@
     "reviewDrop": "Cada una desaparece al terminar su día.",
     "reviewMoves_one": "{{count}} de estas ya tiene un horario para esta persona: se mueve aquí.",
     "reviewMoves_other": "{{count}} de estas ya tienen un horario para esta persona: se mueven aquí."
+  },
+  "page": {
+    "search": "Buscar",
+    "searchAria": "Buscar tareas, rutinas y programaciones",
+    "clearSearch": "Borrar la búsqueda",
+    "all": "Todos",
+    "bonus": "Extra",
+    "personAria": "Mostrar rutinas y programaciones de",
+    "noMatches": "Sin resultados aquí.",
+    "manageSteps": "Gestionar pasos ({{n}})",
+    "stepPrefix": "Paso:",
+    "noRoutinesHere": "No hay rutinas aquí."
+  },
+  "scheduleFlow": {
+    "scheduleButton": "Programar",
+    "title": "Programar {{chore}}",
+    "titleFor": "Programar {{chore}} para {{name}}",
+    "whoTitle": "¿Para quién es?",
+    "whoInfo": "Elige a una persona, o a varias para darles a todas el mismo horario. Para darle a alguien un horario distinto, elige Siguiente horario al final.",
+    "bonusHint": "Para nadie en concreto: cualquiera puede hacerla",
+    "scheduled": "Programada: {{timing}}",
+    "reviewTitle": "Revisa y guarda",
+    "reviewKeep": "Se queda hasta hacerla.",
+    "reviewDrop": "Desaparece al terminar su día.",
+    "complete": "Terminar",
+    "nextInfo": "Si quieres programar esta tarea también para otra persona, con su propio horario, pulsa Siguiente horario.",
+    "next": "Siguiente horario",
+    "savedSoFar": "Programada hasta ahora:",
+    "savedOne": "Guardado para {{name}}: {{timing}}. ¿Quién sigue?",
+    "done_one": "Se guardó {{count}} horario para {{chore}}.",
+    "done_other": "Se guardaron {{count}} horarios para {{chore}}."
   }
 }

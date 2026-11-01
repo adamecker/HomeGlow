@@ -2393,7 +2393,7 @@ function spawnStickyChildren(today, scheduleIds = null) {
   const created = [];
   for (const schedule of stickyParentSchedules) {
     const period = schedule.duration === anyDayChores.ANY_DAY
-      ? anyDayChores.periodOf(today, schedule.interval, schedule.created_at)
+      ? anyDayChores.periodOfSchedule(today, schedule)
       : null;
     let firesToday;
     try {
@@ -2433,6 +2433,26 @@ function spawnStickyChildren(today, scheduleIds = null) {
     ));
   }
   return created;
+}
+
+// An any-day chore's open card is due by its period's last day, which means
+// nothing once the schedule is something else or gone: left alone it would
+// count as due every day, holding back the daily bonus and logging misses.
+// This takes away the not-yet-done cards of `parentId`; their history stays
+// with the parent. A done one goes at the nightly cleanup as usual.
+function dropOpenAnyDayCards(parentId) {
+  const cards = db.prepare(`
+    SELECT id FROM chore_schedules c
+    WHERE c.parent_schedule_id = ? AND c.crontab IS NULL
+      AND NOT EXISTS (SELECT 1 FROM chore_history h WHERE h.chore_schedule_id = c.id AND h.kind = 'completion')
+  `).all(parentId);
+  const keepHistory = db.prepare('UPDATE OR IGNORE chore_history SET chore_schedule_id = ? WHERE chore_schedule_id = ?');
+  const remove = db.prepare('DELETE FROM chore_schedules WHERE id = ?');
+  for (const card of cards) {
+    keepHistory.run(parentId, card.id);
+    remove.run(card.id);
+  }
+  return cards.length;
 }
 
 async function dailyBackgroundProcessing() {
@@ -2487,6 +2507,10 @@ async function dailyBackgroundProcessing() {
     // We want to delete schedules that are completed and will never run again to avoid clutter.
     // kind = 'completion' is load-bearing (issue #72): a 'missed' row must not
     // make an UNcompleted one-time chore look completed and get it pruned.
+    // A schedule that repeated before it was made one-time counts only the
+    // completions logged since (one_time_after_history_id): it still holds
+    // its own, and its cards', from before, and those don't mean the one-time
+    // chore is done.
     //
     // An any-day chore's card goes once its period is over, done or not: the
     // next period starts fresh, and an undone one was logged as one miss on
@@ -2503,6 +2527,7 @@ async function dailyBackgroundProcessing() {
             SELECT 1 FROM chore_history ch
             WHERE ch.chore_schedule_id = cs.id
               AND ch.kind = 'completion'
+              AND (cs.one_time_after_history_id IS NULL OR ch.id > cs.one_time_after_history_id)
           )
           OR (ps.duration = 'any-day' AND cs.due_date IS NOT NULL AND cs.due_date < ?)
         )
@@ -2552,17 +2577,21 @@ async function dailyBackgroundProcessing() {
       prunedChores: choresToPrune,
     }
 
-    // bonus chores that persist from day to day should reset to unassigned
+    // bonus chores that persist from day to day should reset to unassigned.
+    // A card from someone's own schedule stays theirs, clams or not: an
+    // any-day one is open all period, and its person is part of it.
     const choresToReset = db.prepare(`
       SELECT cs.id,
         cs.user_id,
         c.title
       FROM chore_schedules cs
       JOIN chores c ON cs.chore_id = c.id
+      LEFT JOIN chore_schedules ps ON ps.id = cs.parent_schedule_id
       WHERE cs.crontab IS NULL
         AND cs.visible = 1
         AND cs.user_id IS NOT NULL
-        AND c.clam_value > 0;
+        AND c.clam_value > 0
+        AND ps.user_id IS NULL;
     `).all();
     console.log(`Found ${choresToReset.length} bonus chores to reset`);
     let resetScheduleCount = 0;
@@ -3555,6 +3584,11 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
     if (chore_id !== undefined) { updates.push('chore_id = ?'); params.push(chore_id); }
     if (user_id !== undefined) { updates.push('user_id = ?'); params.push(user_id || null); }
     if (crontab !== undefined) { updates.push('crontab = ?'); params.push(crontab || null); }
+    // Made one-time: what it was done before doesn't make it done now (the
+    // nightly cleanup prunes a one-time chore once it's done).
+    if (existingSchedule.crontab && !nextCrontab) {
+      updates.push('one_time_after_history_id = (SELECT COALESCE(MAX(id), 0) FROM chore_history)');
+    }
     if (duration !== undefined) { updates.push('duration = ?'); params.push(nextDuration); }
     if (interval !== undefined || duration !== undefined) {
       updates.push('interval = ?');
@@ -3631,11 +3665,17 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
       }
     }
 
+    // No longer any-day: its open card goes, rather than staying on as a
+    // one-time chore due every day (dropOpenAnyDayCards). Below, the new
+    // timing makes its own card if it needs one.
+    const leftAnyDay = existingSchedule.duration === anyDayChores.ANY_DAY && nextDuration !== anyDayChores.ANY_DAY;
+    if (leftAnyDay) dropOpenAnyDayCards(Number(id));
+
     // Snoozing defers a chore out of today's required set — if that was the
     // assignee's last open chore, their day is now complete. Hiding it, or
     // moving it to other days, does the same (issue #298). Award-only:
     // un-snoozing or showing it again never takes points back.
-    if (snoozed_until !== undefined || visible !== undefined || crontab !== undefined) {
+    if (snoozed_until !== undefined || visible !== undefined || crontab !== undefined || leftAnyDay) {
       const assigneeId = user_id !== undefined ? (user_id || null) : existingSchedule.user_id;
       awardDailyBonusesAfterRemoval([assigneeId]);
     }
@@ -3645,7 +3685,7 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
     const periodChanged = nextDuration === anyDayChores.ANY_DAY
       && (existingSchedule.duration !== anyDayChores.ANY_DAY || nextInterval !== normalizeScheduleInterval(existingSchedule.interval));
     if ((duration !== undefined || interval !== undefined) && periodChanged) {
-      const { end } = anyDayChores.periodOf(getTodayLocalDateString(), nextInterval, existingSchedule.created_at);
+      const { end } = anyDayChores.periodOfSchedule(getTodayLocalDateString(), { ...existingSchedule, interval: nextInterval });
       db.prepare(`
         UPDATE chore_schedules SET due_date = ?
         WHERE parent_schedule_id = ? AND crontab IS NULL
@@ -3670,7 +3710,10 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
 fastify.delete('/api/chore-schedules/:id', async (request, reply) => {
   const { id } = request.params;
   try {
-    const assignee = db.prepare('SELECT user_id FROM chore_schedules WHERE id = ?').get(id)?.user_id;
+    const existing = db.prepare('SELECT user_id, duration FROM chore_schedules WHERE id = ?').get(id);
+    const assignee = existing?.user_id;
+    // An any-day chore's open card goes with it (dropOpenAnyDayCards).
+    if (existing?.duration === anyDayChores.ANY_DAY) dropOpenAnyDayCards(Number(id));
     const stmt = db.prepare('DELETE FROM chore_schedules WHERE id = ?');
     const info = stmt.run(id);
     if (info.changes === 0) {
@@ -5666,6 +5709,12 @@ fastify.post('/api/prizes', async (request, reply) => {
 
 fastify.patch('/api/prizes/:id', async (request, reply) => {
   const { id } = request.params;
+  // Pausing alone sends only `paused`, so it can't undo an edit made elsewhere.
+  if (typeof request.body?.paused === 'boolean' && Object.keys(request.body).length === 1) {
+    const paused = db.prepare('UPDATE prizes SET paused = ? WHERE id = ?').run(request.body.paused ? 1 : 0, id);
+    if (paused.changes === 0) return reply.status(404).send({ error: 'Prize not found' });
+    return { success: true };
+  }
   const { name, clam_cost, description, error: validationError } = validatePrizeBody(request.body);
   if (validationError) {
     return reply.status(400).send({ error: validationError });
@@ -5677,6 +5726,7 @@ fastify.patch('/api/prizes/:id', async (request, reply) => {
     const values = [name, clam_cost];
     if (repeatable !== null) { sets.push('repeatable = ?'); values.push(repeatable); }
     if (description !== undefined) { sets.push('description = ?'); values.push(description); }
+    if (request.body.paused === true || request.body.paused === false) { sets.push('paused = ?'); values.push(request.body.paused ? 1 : 0); }
     const info = db.prepare(`UPDATE prizes SET ${sets.join(', ')} WHERE id = ?`).run(...values, id);
     if (info.changes === 0) {
       return reply.status(404).send({ error: 'Prize not found' });
@@ -5717,7 +5767,7 @@ fastify.get('/api/prize-offers', async (request, reply) => {
     return db.prepare(`
       SELECT po.id, po.prize_id, po.status, po.requested_by, po.requested_at, po.created_at,
              po.split_user_ids,
-             p.name, p.clam_cost, p.repeatable, p.description,
+             p.name, p.clam_cost, p.repeatable, p.description, p.paused,
              u.username AS requested_by_name
       FROM prize_offers po
       JOIN prizes p ON po.prize_id = p.id
@@ -5727,6 +5777,7 @@ fastify.get('/api/prize-offers', async (request, reply) => {
     `).all().map((offer) => ({
       ...offer,
       repeatable: offer.repeatable === 1,
+      paused: offer.paused === 1,
       split_user_ids: offer.split_user_ids ? JSON.parse(offer.split_user_ids) : [],
     }));
   } catch (error) {
@@ -5780,6 +5831,11 @@ fastify.post('/api/prize-offers/:id/request', async (request, reply) => {
     const user = db.prepare('SELECT id FROM users WHERE id = ?').get(user_id);
     if (!user) {
       return reply.status(404).send({ error: 'User not found' });
+    }
+
+    const paused = db.prepare('SELECT p.paused FROM prize_offers po JOIN prizes p ON po.prize_id = p.id WHERE po.id = ?').get(id);
+    if (paused?.paused === 1) {
+      return reply.status(409).send({ code: 'PRIZE_PAUSED', error: 'This prize is paused' });
     }
 
     let splitJson = null;

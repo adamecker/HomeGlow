@@ -28,7 +28,9 @@ import {
 // until it's done", false for "goes at the end of the day", and null where
 // the question doesn't apply. The dialog then asks for the chores and shows a
 // summary before adding. The state lives with the dialog (`value`), so Back
-// from the chores returns to the step it left.
+// from the chores returns to the step it left. The chore dialog's Schedule
+// flow uses it too, between "who" and the summary: `stepsBefore` and
+// `stepsAfter` count the dialog's own steps around it, for "Step 2 of 5".
 
 export const WIZARD_START = {
   step: 'how', how: null, days: [], n: 2, period: '1w', dom: [1], count: 2, unit: 'w', date: '', keep: false,
@@ -44,20 +46,35 @@ const QUICK_DAYS = [
   { key: 'weekends', days: [0, 6] },
 ];
 
+// A whole number from `min` to `max` typed in a field, or null: the server
+// takes no 2.5 days.
+const wholeIn = (value, min, max) => {
+  const text = String(value).trim();
+  if (!/^\d+$/.test(text)) return null;
+  const n = Number(text);
+  return n >= min && n <= max ? n : null;
+};
+
 // The timing the answers so far make, or null while incomplete.
 export function wizardTiming(w) {
   switch (w.how) {
     case 'days': return w.days.length ? weekTiming(w.days) : null;
-    case 'everyN': return Number(w.n) >= 2 && Number(w.n) <= 60 ? everyNTiming(Number(w.n)) : null;
+    case 'everyN': {
+      const n = wholeIn(w.n, 2, 60);
+      return n === null ? null : everyNTiming(n);
+    }
     case 'anyDay': return anyDayTiming(w.period);
     case 'monthly': return w.dom.length ? monthlyTiming([...w.dom].sort((a, b) => a - b).join(',')) : null;
-    case 'after': return Number(w.count) >= 1 && Number(w.count) <= 99 ? afterTiming(`${Number(w.count)}${w.unit}`) : null;
+    case 'after': {
+      const count = wholeIn(w.count, 1, 99);
+      return count === null ? null : afterTiming(`${count}${w.unit}`);
+    }
     case 'once': return onceTiming(w.date || null);
     default: return null;
   }
 }
 
-export default function ScheduleWizard({ value: w, onChange, onDone, timingLabel, shortDays }) {
+export default function ScheduleWizard({ value: w, onChange, onDone, timingLabel, shortDays, stepsBefore = 0, stepsAfter = 2 }) {
   const { t } = useTranslation(['chores', 'common']);
   const set = (patch) => onChange({ ...w, ...patch });
   const timing = wizardTiming(w);
@@ -97,7 +114,7 @@ export default function ScheduleWizard({ value: w, onChange, onDone, timingLabel
   const steps = ['how', 'details', ...(asksMissed || !w.how ? ['missed'] : [])];
   const progress = (
     <Typography variant="caption" color="text.secondary" aria-live="polite">
-      {t('chores:wizard.stepOf', { step: steps.indexOf(w.step) + 1, count: steps.length + 2 })}
+      {t('chores:wizard.stepOf', { step: stepsBefore + steps.indexOf(w.step) + 1, count: stepsBefore + steps.length + stepsAfter })}
     </Typography>
   );
 

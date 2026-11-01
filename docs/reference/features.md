@@ -61,7 +61,8 @@ The chore system uses a **three-table model** (see [Database](../architecture/da
     once a week; change the furnace filter once every 3 months). The period is
     the schedule's `interval`:
     - `1w`: Sunday to Saturday.
-    - `2w`: counted from the week the schedule was made.
+    - `2w`: counted from the week the schedule was made (the household's date,
+      not UTC's: one made at 8 pm on a Saturday in Pacific time starts that week).
     - `1m`: a calendar month.
     - `3m`, `6m`: quarters and halves of the year.
     - `1y`: a calendar year.
@@ -70,8 +71,12 @@ The chore system uses a **three-table model** (see [Database](../architecture/da
     counts. The card is due on the period's last day. Until then it doesn't hold
     back the daily bonus and no miss is logged. On that last day it counts
     toward the bonus if it's still open, and an undone period is logged as
-    **one** miss. When the next period starts, a fresh card replaces the old
-    one, done or not. Its crontab means nothing (kept at `0 0 * * *`). Set it
+    **one** miss. A card made on its last day (the chore was added then) doesn't
+    count that day, as a follow-up doesn't on the day it arrives. When the next
+    period starts, a fresh card replaces the old one, done or not. Moved to
+    another kind of timing, or deleted, its open card goes with it, rather than
+    staying on as a one-time chore due every day. Its due-time sound rings on
+    the card's due date only. Its crontab means nothing (kept at `0 0 * * *`). Set it
     from the board's Add (the wizard's *Once in a while, any day*, or the
     picker's *Once a week, any day*) or the schedule dialog's Duration.
     `weekly`, its name for a day (#362), still works and means every `1w`;
@@ -82,10 +87,17 @@ The chore system uses a **three-table model** (see [Database](../architecture/da
   When a card is cleared, its history moves to the schedule it came from, so the
   board calendar and the card's 7-day row still find it by chore. Before, those
   rows lost their chore when the card was deleted.
+- **Made one-time**: a repeating schedule turned one-time keeps its history,
+  but only what's done after the change makes it done.
+  `one_time_after_history_id` (migration `schema40-oneTimeAfter`) is the last
+  history id at the change; the nightly cleanup counts completions after it.
+  Before, a schedule done once while it repeated was cleared undone the night
+  after it was made one-time, and its chore with it.
 - **Clams** are a reward currency earned by completing chores; balances are derived
   by summing `chore_history` (no denormalized total). Completing *all* of a user's
   daily chores awards a bonus. **Bonus chores** carry a custom clam value and reset
   to unassigned each night; only one uncompleted bonus chore per user at a time.
+  A card from someone's own schedule stays theirs overnight, clams or not.
 - **Chore icons** (issue #141): a chore can carry an optional emoji, picked from
   a grouped bank when creating or editing it. On the dashboard the icon **takes
   the place of the checkmark** while the chore is pending, and reverts to the
@@ -121,6 +133,10 @@ The chore system uses a **three-table model** (see [Database](../architecture/da
   Approval deducts the cost as a named `spent` ledger row, consumes the offer
   (the definition stays in management), and fires a **full-screen confetti
   celebration + chime** on every display via the `prize.redeemed` event.
+  - **Pausing a prize** (⏸ on its row) hides it from the kids' store and refuses
+    new requests, without taking it off the shelf. A request already made still
+    waits for a parent. The search on Prize Management filters the prize list; the
+    store list below it always shows everything.
   - **Repeatable prizes** (a toggle on the definition, shown as 🔁): approval
     returns the offer to the shelf instead of consuming it, for prizes like
     "movie night" that can be redeemed again and again.
@@ -137,9 +153,9 @@ The chore system uses a **three-table model** (see [Database](../architecture/da
 
 ### Schedules by person
 
-Admin → Family → Chores opens its schedules **by person** (the full list is one
-tap away, and each display remembers which it last used). Each person has a
-tab, and unassigned bonus chores have one of their own. A tab shows:
+Admin → Family → Chores shows a person's schedules when their **chip** is picked
+(**All** is the full list, and each display remembers which it last used).
+Unassigned bonus chores have a chip of their own. A person's view shows:
 
 - **A week calendar**, Sunday to Saturday with dates, listing the chores that
   land on each day (hidden schedules left out). Past days read the person's
@@ -157,8 +173,10 @@ tab, and unassigned bonus chores have one of their own. A tab shows:
   "Mon · Wed · Fri", "Every other day", "Monthly · day 1",
   "Every 3 months · Jan 15, Apr 15, Jul 15, Oct 15", "Every year · Mar 20",
   "One-time · Nov 3", "Again 3 days after done", "Once a month, any day".
-  **Add** has two ways in, a **Picker** and a **Wizard**, and each display
-  remembers which it last used (the picker at first).
+  **Add** has two ways in, a **Picker** and a **Wizard**, switched beside the
+  dialog's title, and each display remembers which it last used (the picker
+  at first). Below either one, the person's own schedules are listed, so a
+  chore can join one of those instead (in the wizard, on its first step).
   - **The wizard** steps through it:
     1. How often: certain days of the week, once in a while any day, every
        few days, a date each month, again a while after it's done, or just
@@ -172,7 +190,7 @@ tab, and unassigned bonus chores have one of their own. A tab shows:
     5. A one-line summary, then Add.
 
     Back keeps the answers given. `components/ScheduleWizard.jsx`.
-  - **The picker** offers the person's schedules first, then the common ones,
+  - **The picker** offers the common timings,
     **Monthly** (pick the
   day of the month), **Custom** (every 1, 3, 6 or 9 months or a year, on set
   dates from a start date or counted from when it's done; 9 months only counts
@@ -184,7 +202,8 @@ tab, and unassigned bonus chores have one of their own. A tab shows:
   chore's settings, Day Of ↔ Until Completed). The Add menu lists every common
   schedule, even ones the person already has (picking one adds to it); its day
   row and Change days start on Sunday, and Change days has Every day, Weekdays
-  and Weekends quick buttons.
+  and Weekends quick buttons. The picker's pieces live in
+  `components/SchedulePicker.jsx`, shared with the Schedule flow below.
 
 A group is **not stored**: it is the person's schedules whose crontab day
 fields match (`utils/choreScheduleGroups.js`). Each chore keeps its own schedule
@@ -196,6 +215,24 @@ adding it to another moves its schedule there. Sticky chores' daily copies
 (`parent_schedule_id`) are left out of the view.
 
 **Code:** `ChoreScheduleBoard.jsx`, `utils/choreScheduleGroups.js`.
+
+**Schedule a new chore** (`components/ScheduleChoreDialog.jsx`). The New chore
+dialog has **Cancel**, **Create** and **Schedule**. Schedule saves the chore
+and steps through giving it schedules:
+1. Who it's for: tap to pick one or more people, or **Bonus chores** (no one
+   in particular), then **Next**. Everyone picked gets the same schedule (one
+   schedule row each); an info line says so.
+2. When: the same Picker | Wizard as the board's Add. With one person picked,
+   their own schedules are listed below to join one instead.
+3. A one-line summary, with **Complete**. Under it, an info box offers **Next
+   schedule**: that saves this round and goes back to step 1, for someone
+   else with a different schedule.
+
+Each round is saved as it's confirmed. **Cancel** drops only the one in
+progress; the chore, and any schedules already saved, stay. People already
+scheduled in the flow are marked and can't be picked again. Editing a chore,
+or making one from the board's Add (already scheduling it), shows no Schedule
+button.
 
 ### Chore due-time sounds
 
@@ -318,10 +355,17 @@ widget in step with the server.
 A routine is a checklist of steps a child ticks off: brush teeth, make bed, get dressed.
 It runs on chosen weekdays, or on the days of matching calendar events ("Get ready for
 soccer" on practice and game days). Routines used to be a plugin; they're built in now,
-and set up in **Admin → Family → Chores**. That page lists the chores (collapsed until
-opened), the routines (collapsible), then the schedules. The steps list sits under the
-routines, set in, and shows only while the routines are open (collapsed itself until
-opened). An old link to Family → Routines lands there.
+and set up in **Admin → Family → Chores**. That page has five tabs: Chores, Routines,
+Schedules, History and Settings. A header that stays in view holds the tabs and the
+search. Chips under them pick whose rows show on every tab but Settings: **All**, a
+person (the chores scheduled for them, their routines, their week, their record), or
+**Bonus** (chores with no one assigned; on History, any chore that paid clams). *Manage steps* on the Routines tab opens the
+steps. An old link to Family → Routines lands on that tab.
+
+**Search** filters each tab's rows, and the tabs that know say how many are left
+(*Routines (2)*).
+A routine also matches on its steps and names the one that did (*Step: Brush Teeth*).
+Rows are filtered, not what's in them: the routine editor still shows every step.
 
 - **Each routine is one ordinary chore** (worth 0 clams), with its schedules. It counts
   toward the day once, takes part in the daily bonus, is logged as missed, pauses for
@@ -385,7 +429,7 @@ opened). An old link to Family → Routines lands there.
 **Code:** `server/routes/routines.js` (routes, the calendar sync, the link to chores through
 the chore events and `completeChoreSchedule`), `server/services/routines.js` (the rules,
 pure and tested), migrations `schema29-routines` and `schema30-importRoutinesPlugin`;
-on Family → Chores `RoutinesGroup.jsx`, `RoutineStepsGroup.jsx`, `RoutineEditorDialog.jsx`,
+on Family → Chores `RoutinesGroup.jsx`, `RoutineStepsDialog.jsx`, `ChoresPageBar.jsx`, `RoutineEditorDialog.jsx`,
 `hooks/useRoutines.js` and `utils/routineSchedules.js` (which routine schedules the views
 show); and in the Chores widget `RoutineSteps.jsx` and `utils/useRoutinesToday.js`.
 

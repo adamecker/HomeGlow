@@ -32,6 +32,7 @@ import {
   Autocomplete,
   Tooltip,
   Slider,
+  Snackbar,
   Link,
   ToggleButton,
   ToggleButtonGroup,
@@ -58,6 +59,8 @@ import {
   ArrowDownward,
   Close,
   Search as SearchIcon,
+  Pause,
+  PlayArrow,
   ExpandMore
 } from '@mui/icons-material';
 import AppearanceSettings from './AppearanceSettings';
@@ -73,7 +76,6 @@ import { getDeviceApiBase, getDeviceName, setDeviceName, isValidDeviceName } fro
 import { fetchPinRemembered, setPinRemembered, forgetPinOnAllDevices, shouldPromptForPin } from '../utils/adminPinDevice.js';
 import PinModal from './PinModal';
 import ChoreSchedulesTab from './ChoreSchedulesTab';
-import ChoreHistoryTab from './ChoreHistoryTab';
 import NotificationsTab from './NotificationsTab';
 import TabIconModal from './TabIconModal';
 import DeleteConfirmationDialog from './DeleteConfirmationDialog';
@@ -260,6 +262,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   const [githubWidgets, setGithubWidgets] = useState([]);
   // Quick search over the plugin store, by name.
   const [pluginSearch, setPluginSearch] = useState('');
+  const [prizeSearch, setPrizeSearch] = useState('');
   // Store categories start collapsed; these are the ones opened by hand.
   const [expandedPluginCategories, setExpandedPluginCategories] = useState(() => new Set());
   const togglePluginCategory = (category) => {
@@ -287,6 +290,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   // display that remembers it; the server checks it again. 'change' | 'remove'.
   const [currentPinFor, setCurrentPinFor] = useState(null);
   const currentPin = useRef('');
+  const [pinRememberedHere, setPinRememberedHere] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [checkingPin, setCheckingPin] = useState(true);
   const { tabs, fetchTabs } = useFetchTabs(API_DEVICE_URL);
@@ -524,6 +528,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
       // here as well as in the chore widget. Honouring it in one gate and not
       // the other would read as broken.
       const remembered = exists ? await fetchPinRemembered(API_BASE_URL) : false;
+      setPinRememberedHere(remembered);
 
       if (shouldPromptForPin({ pinExists: exists, remembered })) {
         setPinModal({ open: true, mode: 'verify', title: t('admin:pin.enter') });
@@ -609,6 +614,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
       setChores([]);
     }
   };
+
+  const prizeMatchesSearch = (prize) => `${prize.name} ${prize.description || ''}`.toLowerCase().includes(prizeSearch.trim().toLowerCase());
 
   const fetchPrizes = async () => {
     try {
@@ -816,35 +823,31 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     }
   };
 
-  // The celebration fires at exactly the moment the daily reward is earned, so
-  // the two save together rather than needing their own button (issue #140).
-  // Family → Chores → Settings saves rewards, celebrations and sounds together.
-  const saveChoreSettings = async () => {
-    setIsLoading(true);
+  // Family → Chores → Settings saves each change as it's made, since the rows sit
+  // mid-page with no place for a button. Word comes in a snackbar, as a message
+  // at the top of the panel would be out of sight and push the page down.
+  const [choreSettingNote, setChoreSettingNote] = useState(null);
+  // `choreSettingBefore` holds a typed or dragged value's last saved one until
+  // it's committed, for going back to, and to know that anything changed at all.
+  const choreSettingBefore = useRef({});
+  const editChoreSetting = (key, value) => {
+    if (!(key in choreSettingBefore.current)) choreSettingBefore.current[key] = settings[key];
+    setSettings((prev) => ({ ...prev, [key]: value }));
+  };
+  const commitChoreSetting = (key, value) => {
+    if (!(key in choreSettingBefore.current)) return;
+    const before = choreSettingBefore.current[key];
+    delete choreSettingBefore.current[key];
+    if (String(before ?? '') !== String(value)) saveChoreSetting(key, value, before);
+  };
+  const saveChoreSetting = async (key, value, revertTo) => {
+    setSettings((prev) => ({ ...prev, [key]: value }));
     try {
-      await Promise.all([
-        axios.post(`${API_BASE_URL}/api/settings`, {
-          key: 'daily_completion_clam_reward',
-          value: settings.daily_completion_clam_reward || '2',
-        }),
-        axios.post(`${API_BASE_URL}/api/settings`, {
-          key: 'CHORE_CELEBRATION_ENABLED',
-          value: settings.CHORE_CELEBRATION_ENABLED === false || settings.CHORE_CELEBRATION_ENABLED === 'false'
-            ? 'false'
-            : 'true',
-        }),
-        axios.post(`${API_BASE_URL}/api/settings`, { key: 'CHORE_SOUND_ENABLED', value: settings.CHORE_SOUND_ENABLED || 'false' }),
-        axios.post(`${API_BASE_URL}/api/settings`, { key: 'CHORE_SOUND_DEFAULT', value: settings.CHORE_SOUND_DEFAULT || '' }),
-        axios.post(`${API_BASE_URL}/api/settings`, { key: 'CHORE_SOUND_VOLUME', value: String(settings.CHORE_SOUND_VOLUME ?? '100') }),
-      ]);
-      setSaveMessage({ show: true, type: 'success', text: t('admin:messages.choreSettingsSaved') });
-      setTimeout(() => setSaveMessage({ show: false, type: '', text: '' }), 3000);
-    } catch (error) {
-      console.error('Error saving chore settings:', error);
-      setSaveMessage({ show: true, type: 'error', text: t('admin:messages.choreSettingsFailed') });
-      setTimeout(() => setSaveMessage({ show: false, type: '', text: '' }), 3000);
-    } finally {
-      setIsLoading(false);
+      await saveSetting(key, value, false);
+      setChoreSettingNote(t('admin:messages.settingSaved'));
+    } catch {
+      setSettings((prev) => ({ ...prev, [key]: revertTo }));
+      setChoreSettingNote(t('admin:messages.settingSaveFailed'));
     }
   };
 
@@ -1644,6 +1647,17 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     }
   };
 
+  const togglePrizePaused = async (prize) => {
+    try {
+      await axios.patch(`${API_BASE_URL}/api/prizes/${prize.id}`, { paused: !prize.paused });
+      await fetchPrizes();
+    } catch (error) {
+      console.error('Error pausing prize:', error);
+      setSaveMessage({ show: true, type: 'error', text: t('admin:messages.prizePauseFailed') });
+      setTimeout(() => setSaveMessage({ show: false, type: '', text: '' }), 3000);
+    }
+  };
+
   const deletePrize = async (prizeId) => {
     if (window.confirm(t('admin:confirm.deletePrize'))) {
       try {
@@ -1883,6 +1897,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
         try {
           const { failed } = await forgetPinOnAllDevices(API_BASE_URL);
           forgetFailed = failed > 0;
+          setPinRememberedHere(await fetchPinRemembered(API_BASE_URL));
         } catch (error) {
           console.error('Error clearing remembered PIN devices after a PIN change:', error);
           forgetFailed = true;
@@ -1903,6 +1918,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
             // a failure to record the preference.
             try {
               await setPinRemembered(API_BASE_URL, true);
+              setPinRememberedHere(true);
             } catch (error) {
               console.error('Error remembering PIN on this device:', error);
             }
@@ -1931,10 +1947,25 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     setPinModal({ open: false, mode: 'verify', title: '' });
   };
 
+  // Takes effect the next time the PIN would be asked for; this open panel stays open.
+  const handleForgetPinHere = async () => {
+    try {
+      await setPinRemembered(API_BASE_URL, false);
+      setPinRememberedHere(false);
+      window.dispatchEvent(new Event(DEVICE_SETTINGS_UPDATED_EVENT));
+      setSaveMessage({ show: true, type: 'success', text: t('admin:messages.pinForgottenHere') });
+    } catch (error) {
+      console.error('Error forgetting the PIN on this device:', error);
+      setSaveMessage({ show: true, type: 'error', text: t('admin:messages.pinDevicesForgetFailed') });
+    }
+    setTimeout(() => setSaveMessage({ show: false, type: '', text: '' }), 3000);
+  };
+
   const handleForgetPinDevices = async () => {
     if (!window.confirm(t('admin:confirm.forgetPinDevices'))) return;
     try {
       const { total, failed } = await forgetPinOnAllDevices(API_BASE_URL);
+      setPinRememberedHere(await fetchPinRemembered(API_BASE_URL));
       if (failed > 0) {
         setSaveMessage({
           show: true,
@@ -3370,13 +3401,11 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
 
       {location.section === 'chores' && (
         <>
-          {location.subsection === 'definitions' && (
-            <ChoreSchedulesTab setSaveMessage={setSaveMessage} />
-          )}
-          {location.subsection === 'history' && (
-            <ChoreHistoryTab />
-          )}
-          {location.subsection === 'settings' && (
+          <ChoreSchedulesTab
+            setSaveMessage={setSaveMessage}
+            section={location.subsection}
+            onSection={(subsection) => navigate({ ...location, subsection })}
+            settings={(
             <>
               <AdminGroup title={t('admin:chores.rewards')}>
                 <AdminRow
@@ -3387,7 +3416,9 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                       type="number"
                       size="small"
                       value={settings.daily_completion_clam_reward || '2'}
-                      onChange={(e) => setSettings(prev => ({ ...prev, daily_completion_clam_reward: e.target.value }))}
+                      onChange={(e) => editChoreSetting('daily_completion_clam_reward', e.target.value)}
+                      onBlur={() => commitChoreSetting('daily_completion_clam_reward', settings.daily_completion_clam_reward || '2')}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.target.blur(); }}
                       slotProps={{ htmlInput: { min: 0, max: 100, 'aria-label': t('admin:chores.dailyReward') } }}
                       sx={{ width: 96 }}
                     />
@@ -3399,10 +3430,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   control={(
                     <Switch
                       checked={settings.CHORE_CELEBRATION_ENABLED !== 'false' && settings.CHORE_CELEBRATION_ENABLED !== false}
-                      onChange={(e) => setSettings(prev => ({
-                        ...prev,
-                        CHORE_CELEBRATION_ENABLED: e.target.checked ? 'true' : 'false',
-                      }))}
+                      onChange={(e) => saveChoreSetting('CHORE_CELEBRATION_ENABLED', e.target.checked ? 'true' : 'false', settings.CHORE_CELEBRATION_ENABLED)}
                       slotProps={{ input: { 'aria-label': t('admin:chores.celebrationEnable') } }}
                     />
                   )}
@@ -3415,7 +3443,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   control={(
                     <Switch
                       checked={settings.CHORE_SOUND_ENABLED === 'true' || settings.CHORE_SOUND_ENABLED === true}
-                      onChange={(e) => setSettings(prev => ({ ...prev, CHORE_SOUND_ENABLED: e.target.checked ? 'true' : 'false' }))}
+                      onChange={(e) => saveChoreSetting('CHORE_SOUND_ENABLED', e.target.checked ? 'true' : 'false', settings.CHORE_SOUND_ENABLED)}
                       slotProps={{ input: { 'aria-label': t('admin:chores.soundsEnable') } }}
                     />
                   )}
@@ -3429,7 +3457,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                       <SoundPicker
                         label={t('admin:chores.defaultSound')}
                         value={settings.CHORE_SOUND_DEFAULT || ''}
-                        onChange={(sound) => setSettings(prev => ({ ...prev, CHORE_SOUND_DEFAULT: sound }))}
+                        onChange={(sound) => saveChoreSetting('CHORE_SOUND_DEFAULT', sound, settings.CHORE_SOUND_DEFAULT)}
                         volume={(Number(settings.CHORE_SOUND_VOLUME) || 100) / 100}
                         includeNoneOption
                         noneLabel="(none)"
@@ -3444,7 +3472,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                   control={(
                     <Slider
                       value={Number(settings.CHORE_SOUND_VOLUME) || 0}
-                      onChange={(_, v) => setSettings(prev => ({ ...prev, CHORE_SOUND_VOLUME: String(v) }))}
+                      onChange={(_, v) => editChoreSetting('CHORE_SOUND_VOLUME', String(v))}
+                      onChangeCommitted={(_, v) => commitChoreSetting('CHORE_SOUND_VOLUME', String(v))}
                       min={0}
                       max={100}
                       valueLabelDisplay="auto"
@@ -3455,13 +3484,15 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                 />
               </AdminGroup>
 
-              <AdminFooter>
-                <Button variant="contained" onClick={saveChoreSettings} disabled={isLoading} startIcon={<Save />}>
-                  {isLoading ? t('common:state.saving') : t('common:actions.save')}
-                </Button>
-              </AdminFooter>
+              <Snackbar
+                open={Boolean(choreSettingNote)}
+                autoHideDuration={2000}
+                onClose={() => setChoreSettingNote(null)}
+                message={choreSettingNote}
+              />
             </>
-          )}
+            )}
+          />
         </>
       )}
 
@@ -3524,7 +3555,34 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
           </AdminGroup>
 
           <AdminGroup title={t('admin:prizes.management')}>
-            {prizes.map((prize) => (editingPrize?.id === prize.id ? (
+            <Box sx={{ px: 2, py: 1.5 }}>
+              <TextField
+                fullWidth
+                size="small"
+                value={prizeSearch}
+                onChange={(event) => setPrizeSearch(event.target.value)}
+                placeholder={t('admin:prizes.search')}
+                slotProps={{
+                  htmlInput: { 'aria-label': t('admin:prizes.search') },
+                  input: {
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon fontSize="small" />
+                      </InputAdornment>
+                    ),
+                    endAdornment: prizeSearch && (
+                      <InputAdornment position="end">
+                        <IconButton size="small" edge="end" aria-label={t('common:actions.clear')} onClick={() => setPrizeSearch('')}>
+                          <Close fontSize="small" />
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
+              />
+            </Box>
+            {prizeSearch.trim() && !prizes.some(prizeMatchesSearch) && <AdminNote>{t('admin:prizes.noMatches')}</AdminNote>}
+            {prizes.filter((prize) => editingPrize?.id === prize.id || prizeMatchesSearch(prize)).map((prize) => (editingPrize?.id === prize.id ? (
               <Box key={prize.id} sx={{ px: 2, py: 1.5, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
                 <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
                   <TextField
@@ -3590,6 +3648,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     {prize.repeatable
                       ? t('admin:prizes.costLineRepeatable', { cost: prize.clam_cost })
                       : t('admin:prizes.costLine', { cost: prize.clam_cost })}
+                    {prize.paused ? ` · ${t('admin:prizes.pausedShort')}` : ''}
                   </>
                 )}
                 control={(
@@ -3597,6 +3656,11 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                     <Tooltip title={prize.repeatable ? 'Add to store (stays on the shelf after each redemption)' : 'Add to store (one-time redeemable offer)'}>
                       <IconButton onClick={() => addPrizeToStore(prize.id)} color="primary" size="small" aria-label="Add to store">
                         <Add fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title={prize.paused ? t('admin:prizes.resume') : t('admin:prizes.pause')}>
+                      <IconButton onClick={() => togglePrizePaused(prize)} size="small" aria-label={`${prize.paused ? t('admin:prizes.resume') : t('admin:prizes.pause')}: ${prize.name}`}>
+                        {prize.paused ? <PlayArrow fontSize="small" /> : <Pause fontSize="small" />}
                       </IconButton>
                     </Tooltip>
                     <Tooltip title={t('common:actions.edit')}>
@@ -3624,8 +3688,8 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                 key={offer.id}
                 label={`${offer.name} — ${offer.clam_cost} 🥟${offer.repeatable ? ' · 🔁' : ''}`}
                 hint={offer.status === 'requested'
-                  ? t('admin:prizes.requestedBy', { name: offer.requested_by_name || t('common:state.none') })
-                  : 'On the shelf'}
+                  ? `${t('admin:prizes.requestedBy', { name: offer.requested_by_name || t('common:state.none') })}${offer.paused ? ` · ${t('admin:prizes.pausedShort')}` : ''}`
+                  : (offer.paused ? t('admin:prizes.pausedHidden') : t('admin:prizes.onTheShelf'))}
                 control={(
                   <Tooltip title={offer.status === 'requested' ? 'Decline request and remove from store' : 'Remove from store'}>
                     <IconButton onClick={() => removePrizeOffer(offer.id)} color="error" size="small" aria-label={offer.status === 'requested' ? 'Decline request and remove from store' : 'Remove from store'}>
@@ -3745,6 +3809,11 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                 <AdminRow
                   control={(
                     <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', width: '100%', justifyContent: 'flex-end' }}>
+                      {pinRememberedHere && (
+                        <Button variant="outlined" onClick={handleForgetPinHere}>
+                          {t('admin:pin.forgetHere')}
+                        </Button>
+                      )}
                       <Button variant="outlined" onClick={handleForgetPinDevices}>
                         {t('admin:pin.forgetDevices')}
                       </Button>
@@ -3759,6 +3828,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
             </AdminGroup>
 
             <ControlsOnDisplay
+              key={String(pinRememberedHere)}
               apiBaseUrl={API_BASE_URL}
               devices={devices}
               currentDeviceName={currentDeviceName}
