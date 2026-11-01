@@ -57,7 +57,6 @@ import {
   ArrowUpward,
   ArrowDownward,
   Close,
-  ChevronLeft,
   Search as SearchIcon,
   ExpandMore
 } from '@mui/icons-material';
@@ -95,7 +94,6 @@ import SoundPicker from './SoundPicker';
 import ControlsOnDisplay from './ControlsOnDisplay';
 import ExpandWidgetsSettings from './ExpandWidgetsSettings';
 import { frameNameFor } from '../utils/pluginLocalStore.js';
-import { buildPluginOpenSrc } from '../utils/pluginOpenSrc.js';
 import useFetchTabs from '../hooks/useFetchTabs.js';
 import { MAX_DOCK_HIDE_MINUTES, screensaverPreemptsDock } from '../utils/dockIdleHide.js';
 import useIsMobile from '../hooks/useIsMobile.js';
@@ -2049,11 +2047,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     );
   }
 
-  // The plugin the Open view shows, by filename from the hash; the filename
-  // itself when the plugin is not (or not yet) in the installed list, so a
-  // direct link never renders an empty title.
-  const openPluginName = uploadedWidgets.find((widget) => widget.filename === location.detail)?.name || location.detail;
-
   return (
     <AdminShell location={location} navigate={navigate} onClose={onRequestClose} startOnList={startOnList}>
       {/* One place for every tab, rather than a copy per tab that most
@@ -2160,63 +2153,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
               </>
             )}
 
-            {/* Open: one installed plugin full-screen, reached from its row
-                below and by hash (#/admin/plugins/open/<file>).
-                Same iframe construction as the live preview, at the panel
-                content's full height and with the dashboard's sandbox set:
-                the user is USING the widget here, not previewing it. Still
-                opaque (no allow-same-origin), so a plugin can't act as
-                HomeGlow from here either. */}
-            {location.section === 'plugins' && location.subsection === 'open' && location.detail && (
-              <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-                  <Button
-                    size="small"
-                    startIcon={<ChevronLeft />}
-                    onClick={() => navigate({ tab: 'dashboard', section: 'plugins' })}
-                  >
-                    {t('admin:sections.plugins')}
-                  </Button>
-                  <Typography variant="subtitle1" component="h3" sx={{ fontWeight: 600 }}>
-                    {openPluginName}
-                  </Typography>
-                </Box>
-                <Box sx={{ flex: 1, minHeight: 0, border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
-                  <iframe
-                    title={t('admin:plugins.openTitle', { name: openPluginName })}
-                    // Same channel PluginWidgetWrapper uses, read from the
-                    // root element because the Admin Panel has no theme prop.
-                    //
-                    // device is carried too, and is not cosmetic: the plugin
-                    // platform refuses to WRITE a device-scoped setting
-                    // without it, so a plugin whose own UI saves one would
-                    // fail here while working fine on the dashboard.
-                    //
-                    // On a narrow viewport the shell also appends mobile=1
-                    // (buildPluginOpenSrc): the shell decides mobile context
-                    // from the viewport — the same useIsMobile() cutoff as
-                    // the dashboard phone layout, below 600px — and the
-                    // frame trusts the signal; no plugin UA-sniffing.
-                    // Desktop Open views get no mobile param, exactly as
-                    // before. The param is the mechanism only: a plugin
-                    // that ignores it renders exactly as before.
-                    src={buildPluginOpenSrc({
-                      apiBaseUrl: API_BASE_URL,
-                      filename: location.detail,
-                      theme: document.documentElement.getAttribute('data-theme') || 'light',
-                      device: currentDeviceName,
-                      lang: i18n.language || 'en',
-                      isMobile,
-                    })}
-                    sandbox="allow-scripts allow-forms allow-popups"
-                    allow="geolocation"
-                    name={frameNameFor(location.detail)}
-                    style={{ width: '100%', height: '100%', border: 0, display: 'block', backgroundColor: 'var(--card-bg)' }}
-                  />
-                </Box>
-              </Box>
-            )}
-            {location.section === 'plugins' && location.subsection !== 'open' && (
+            {location.section === 'plugins' && (
               <>
                 {/* The uploaded-widget list that used to sit beside this was a
                     second view of the same array the Plugin Settings section
@@ -2485,15 +2422,6 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                                   {previewPlugin === plugin.filename
                                     ? t('admin:plugins.hidePreview')
                                     : t('admin:plugins.showPreview')}
-                                </Button>
-                                {/* Full-screen, in its own panel view: the
-                                    dashboard-free way to USE a plugin on a
-                                    phone, rather than scrolling to its card. */}
-                                <Button
-                                  size="small"
-                                  onClick={() => navigate({ tab: 'dashboard', section: 'plugins', subsection: 'open', detail: plugin.filename })}
-                                >
-                                  {t('admin:plugins.open')}
                                 </Button>
                                 <Tooltip title={t('common:actions.delete')}>
                                   <IconButton onClick={() => deleteWidget(plugin.filename)} color="error" size="small" aria-label={t('common:actions.delete')}>
