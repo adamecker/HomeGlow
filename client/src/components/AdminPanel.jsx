@@ -61,7 +61,8 @@ import {
   Search as SearchIcon,
   Pause,
   PlayArrow,
-  ExpandMore
+  ExpandMore,
+  SettingsRemote
 } from '@mui/icons-material';
 import AppearanceSettings from './AppearanceSettings';
 import DisplayDimmingSettings from './DisplayDimmingSettings';
@@ -72,7 +73,8 @@ import { API_BASE_URL } from '../utils/apiConfig.js';
 import { editWholeNumber, savedWholeNumber } from '../utils/wholeNumberField.js';
 import { pinErrorText } from '../utils/pinErrors.js';
 import { revealTabPicker } from '../utils/revealTabPicker.js';
-import { getDeviceApiBase, getDeviceName, setDeviceName, isValidDeviceName } from '../utils/deviceName.js';
+import { getDeviceApiBase, getDeviceName, getLocalDeviceName, getLocalDeviceApiBase, setDeviceName, isValidDeviceName } from '../utils/deviceName.js';
+import { buildMirrorHash } from '../utils/mirrorMode.js';
 import { fetchPinRemembered, setPinRemembered, forgetPinOnAllDevices, shouldPromptForPin } from '../utils/adminPinDevice.js';
 import PinModal from './PinModal';
 import ChoreSchedulesTab from './ChoreSchedulesTab';
@@ -179,8 +181,23 @@ const formRowsSx = { '& > * + *': { borderTop: 1, borderColor: 'divider' } };
 const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequestClose }) => {
   const { t, i18n } = useTranslation(['admin', 'common']);
   const isMobile = useIsMobile();
-  const [currentDeviceName, setCurrentDeviceName] = useState(() => getDeviceName());
+  // This browser's own device, always — even in mirror-Admin (remote
+  // control): the "Current" chip, the rename row, the copy destination, and
+  // the delete guard all mean THIS physical browser, never the target.
+  const [currentDeviceName, setCurrentDeviceName] = useState(() => getLocalDeviceName());
+  // Device-scoped reads/writes address the EFFECTIVE device: the mirror
+  // target while mirroring, else this browser's own device. That is the
+  // whole point of mirror-Admin — Admin edits land on the target.
   const API_DEVICE_URL = getDeviceApiBase(API_BASE_URL);
+  // The device being edited in this panel (target in mirror-Admin, local
+  // otherwise), for call sites that address a device by name instead of
+  // through API_DEVICE_URL (plugin settings, preview frames, display
+  // controls, notifications).
+  const effectiveDeviceName = getDeviceName();
+  // Copy-to-current is the one device write that must ALWAYS land on this
+  // browser's own device, even in mirror-Admin — copying onto the target
+  // would clobber the wall with its own settings in reverse.
+  const LOCAL_API_DEVICE_URL = getLocalDeviceApiBase(API_BASE_URL);
   const CORE_WIDGET_DEFAULT_SIZES = {
     calendar: { w: 8, h: 5 },
     weather: { w: 4, h: 3 },
@@ -507,9 +524,9 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
   // nothing to fold in here; this exists only to tell the live dashboard that
   // the screen it is drawing just changed.
   const handleDisplayControlLimitsSaved = useCallback((deviceName) => {
-    if (deviceName !== currentDeviceName) return;
+    if (deviceName !== effectiveDeviceName) return;
     window.dispatchEvent(new Event(DEVICE_SETTINGS_UPDATED_EVENT));
-  }, [currentDeviceName]);
+  }, [effectiveDeviceName]);
 
   const fetchUsers = async () => {
     try {
@@ -592,7 +609,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
     const entries = await Promise.all(manifestPlugins.map(async (widget) => {
       try {
         const response = await axios.get(
-          `${API_BASE_URL}/api/plugin/v1/settings/${widget.pluginId}?device=${encodeURIComponent(currentDeviceName)}`
+          `${API_BASE_URL}/api/plugin/v1/settings/${widget.pluginId}?device=${encodeURIComponent(effectiveDeviceName)}`
         );
         return [widget.pluginId, response.data && typeof response.data === 'object' ? response.data : {}];
       } catch (error) {
@@ -969,7 +986,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
         if (Object.keys(values).length === 0) return;
         try {
           await axios.put(
-            `${API_BASE_URL}/api/plugin/v1/settings/${widget.pluginId}?device=${encodeURIComponent(currentDeviceName)}`,
+            `${API_BASE_URL}/api/plugin/v1/settings/${widget.pluginId}?device=${encodeURIComponent(effectiveDeviceName)}`,
             values
           );
         } catch (error) {
@@ -1265,7 +1282,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
 
     try {
       setIsLoading(true);
-      await axios.post(`${API_DEVICE_URL}/copy-from/${encodeURIComponent(copyDeviceDialog.device.name)}`);
+      await axios.post(`${LOCAL_API_DEVICE_URL}/copy-from/${encodeURIComponent(copyDeviceDialog.device.name)}`);
 
       setCopyDeviceDialog({ open: false, device: null });
       await fetchTabs();
@@ -2410,7 +2427,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                                   // platform refuses to WRITE a device-scoped setting
                                   // without it, so a plugin whose own UI saves one would
                                   // fail here while working fine on the dashboard.
-                                  src={`${API_BASE_URL}/widgets/${encodeURIComponent(plugin.filename)}?theme=${document.documentElement.getAttribute('data-theme') || 'light'}&device=${encodeURIComponent(currentDeviceName)}&lang=${i18n.language || 'en'}`}
+                                  src={`${API_BASE_URL}/widgets/${encodeURIComponent(plugin.filename)}?theme=${document.documentElement.getAttribute('data-theme') || 'light'}&device=${encodeURIComponent(effectiveDeviceName)}&lang=${i18n.language || 'en'}`}
                                   // Opaque, like the dashboard's frames (PluginWidgetWrapper):
                                   // a plugin can't act as HomeGlow from here either.
                                   sandbox="allow-scripts allow-forms"
@@ -2738,6 +2755,18 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
                               <Tooltip title={t('admin:devices.copyToCurrent')}>
                                 <IconButton onClick={() => openCopyDeviceDialog(device)} size="small" aria-label={t('admin:devices.copyToCurrent')}>
                                   <ContentCopy fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            {/* Remote control: mirror this device's dashboard
+                                here, so its layout and settings can be edited
+                                from this browser. The mirror writes to this
+                                row's device, never to this browser's own
+                                device, and never creates a device row. */}
+                            {!isCurrent && (
+                              <Tooltip title={t('admin:devices.remoteControl')}>
+                                <IconButton onClick={() => { window.location.hash = buildMirrorHash(device.name); }} size="small" aria-label={t('admin:devices.remoteControl')}>
+                                  <SettingsRemote fontSize="small" />
                                 </IconButton>
                               </Tooltip>
                             )}
@@ -3712,7 +3741,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
               key={String(pinRememberedHere)}
               apiBaseUrl={API_BASE_URL}
               devices={devices}
-              currentDeviceName={currentDeviceName}
+              currentDeviceName={effectiveDeviceName}
               pinExists={pinExists}
               householdSettings={settings}
               plugins={uploadedWidgets}
@@ -3955,7 +3984,7 @@ const AdminPanel = ({ setWidgetSettings, onPluginsChanged, onTabsChanged, onRequ
 
       {location.section === 'notifications' && (
         <NotificationsTab
-          deviceName={currentDeviceName}
+          deviceName={effectiveDeviceName}
           onOpenConnections={() => navigate({ tab: 'system', section: 'connections' })}
         />
       )}
