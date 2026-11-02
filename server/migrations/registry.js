@@ -52,4 +52,5 @@ module.exports = [
   { schemaId: 44, migrationPath: './migrations/schema44-anyDayChores', },
   { schemaId: 45, migrationPath: './migrations/schema45-prizePaused', },
   { schemaId: 46, migrationPath: './migrations/schema46-oneTimeAfter', },
+  { schemaId: 47, migrationPath: './migrations/schema47-deviceViewport', },
 ];
