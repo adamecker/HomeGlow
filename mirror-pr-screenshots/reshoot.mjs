@@ -69,6 +69,21 @@ async function launch({ port, profile, width, height }) {
 
 const phone = await launch({ port: 9244, profile: "/home/ecker-house/mirror-pr-phone", width: 390, height: 844 });
 try {
+  // Restore the wall device to a photogenic state first: the earlier full
+  // test pass left its calendar dragged and disabled. (Test device only.)
+  await fetch("http://localhost:3001/api/devices/" + WALL + "/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ widgetSettings: { calendar: { enabled: true }, weather: { enabled: true } } }),
+  });
+  await fetch("http://localhost:3001/api/devices/" + WALL + "/widget-assignments/layout/bulk", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ layouts: [
+      { widget_name: "calendar", tabNumber: 1, layout_x: 0, layout_y: 0, layout_w: 6, layout_h: 4 },
+      { widget_name: "weather", tabNumber: 1, layout_x: 6, layout_y: 0, layout_w: 6, layout_h: 4 },
+    ] }),
+  });
   await phone.send("Page.navigate", { url: "http://localhost:3001/#/mirror/" + WALL });
   await sleep(3000);
   await phone.ev("localStorage.setItem('homeglow_device_name', '" + PHONE + "'); localStorage.setItem('widgetsLocked', 'false');");
