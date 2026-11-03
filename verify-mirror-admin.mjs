@@ -249,7 +249,7 @@ try {
     while (el) {
       const cs = getComputedStyle(el);
       if (cs.transform && cs.transform !== 'none') {
-        const m = /matrix\(([^,]+),/.exec(cs.transform);
+        const m = /matrix\\(([^,]+),/.exec(cs.transform);
         return { width: parseFloat(cs.width), scale: m ? parseFloat(m[1]) : null };
       }
       el = el.parentElement;
