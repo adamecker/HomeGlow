@@ -147,11 +147,12 @@ const clickDockSettings = async (b, mx, my) => {
   return item ? "CLICKED" : "NO_ITEM";
 };
 const clickTab = async (b, label) => b.ev(`(() => {
-  const btn = [...document.querySelectorAll('button')].find(x => x.innerText.trim() === '${label}');
-  if (btn) { btn.click(); return 'BUTTON'; }
-  const leaf = [...document.querySelectorAll('*')].find(e => e.children.length === 0 && e.innerText && e.innerText.trim() === '${label}');
-  if (leaf) { leaf.click(); return 'LEAF'; }
-  return false;
+  const el = [...document.querySelectorAll('[aria-label="${label}"], [title="${label}"]')][0]
+    || [...document.querySelectorAll('button')].find(x => x.innerText.trim() === '${label}')
+    || [...document.querySelectorAll('*')].find(e => e.children.length === 0 && e.innerText && e.innerText.trim() === '${label}');
+  if (!el) return false;
+  (el.closest('button') || el).click();
+  return 'CLICKED';
 })()`);
 const gridCount = async (b) => b.ev("document.querySelectorAll('.react-grid-item').length");
 const hideDemo = async (b) => b.ev(`(() => {
@@ -228,7 +229,7 @@ try {
   // ---- Tab isolation: mirror -> Extras, wall stays on Home ----
   const tabClicked = await clickTab(phone, "Extras");
   console.log("mirror Extras tab click:", tabClicked);
-  check("mirror Extras tab clicked", tabClicked === "BUTTON" || tabClicked === "LEAF", String(tabClicked));
+  check("mirror Extras tab clicked", tabClicked === "CLICKED", String(tabClicked));
   await sleep(1500);
   const mirrorCount = await gridCount(phone);
   const wallCount = await gridCount(wall);
@@ -236,7 +237,7 @@ try {
   check("mirror on Extras shows 1 item (weather only)", mirrorCount === 1, "mirror=" + mirrorCount);
   check("wall stayed on Home (still 2 items)", wallCount === 2, "wall=" + wallCount);
   const backClicked = await clickTab(phone, "Home");
-  check("mirror Home tab clicked back", backClicked === "BUTTON" || backClicked === "LEAF", String(backClicked));
+  check("mirror Home tab clicked back", backClicked === "CLICKED", String(backClicked));
   await sleep(1500);
   check("mirror back on Home shows 2 items", (await gridCount(phone)) === 2);
 
