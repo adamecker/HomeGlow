@@ -713,9 +713,20 @@ const App = () => {
     void seedMobileDevice();
   }, [isMobile, demoStatus.demo, isFirstRunClient, deviceSettingsLoaded]);
 
+  // NOTE (mirror stale-closure trap): this fetch MUST resolve the device at
+  // call time, not close over the render's API_DEVICE_URL. The household-
+  // changes subscription below is created once — its effect depends only on
+  // fetchHouseholdSettings, a useCallback with [] deps — so the handler it
+  // captured on mount keeps calling the mount render's fetch. A browser that
+  // mounts on its own device and then enters mirror mode would otherwise
+  // refetch its OWN assignments on every bump while mirroring: widgets the
+  // phone lacks vanish from the mirror grid, and widgets it shares snap to
+  // the phone's saved positions — the mirror resize/move jitter. Reading the
+  // session override here makes every refetch, however old the closure,
+  // land on the device the session currently means.
   const fetchWidgetAssignments = async () => {
     try {
-      const response = await axios.get(`${API_DEVICE_URL}/widget-assignments`);
+      const response = await axios.get(`${getDeviceApiBase(API_BASE_URL)}/widget-assignments`);
       const assignments = Array.isArray(response.data) ? response.data : [];
 
       const groupedAssignments = {};
@@ -1784,7 +1795,8 @@ const App = () => {
       >
         <DialogContent sx={{ p: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Mirror-Admin banner: the SAME banner as the mirror view
-              (label + Unlock + Exit, no Admin button, no zoom), rendered
+              but label + Exit only — no layout toggle above a settings
+              panel (the view banner keeps Unlock + Exit) — rendered
               ABOVE the panel so it shows on every Admin page including
               the top-level list. Exit here is the mirror exit: it lands
               on Admin Devices, local, like the mirror view's Exit. */}
@@ -1794,6 +1806,7 @@ const App = () => {
               locked={widgetsLocked}
               onToggleLock={toggleWidgetsLock}
               onExit={exitMirror}
+              showLock={false}
               sx={{ marginBottom: 0, flexShrink: 0 }}
             />
           )}
