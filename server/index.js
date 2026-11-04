@@ -239,6 +239,9 @@ const { DOMAINS: HOUSEHOLD_DOMAINS, createHouseholdChanges, domainsForRequest } 
 // where it reaches the browser.
 const householdChanges = createHouseholdChanges({
   onBump: (domains, revisions) => pluginEvents.emit('household.changed', { domains, revisions }),
+  // A plugin's storage write goes out under its own event (issue #347): the
+  // frame learns only that its own plugin's storage changed, never a key.
+  onPluginStorage: (pluginId, revision) => pluginEvents.emit('plugin.storage.changed', { pluginId, revision }),
 });
 const haPanelRules = require('./services/haPanels');
 const { HaLive } = require('./services/haLive');
@@ -679,6 +682,10 @@ fastify.addHook('onRequest', async (request, reply) => {
 fastify.addHook('onResponse', async (request, reply) => {
   const domains = domainsForRequest(request.method, request.routeOptions?.url, reply.statusCode);
   if (domains.length) householdChanges.bump(domains);
+  // Plugin storage counters move in-route only (issue #347): the three
+  // storage handlers bump so the response can carry the revision the event
+  // will carry. There is no hook backstop here — the old one could never
+  // fire, since it only matched those same three routes.
 });
 
 fastify.register(multipart, {
@@ -1079,6 +1086,12 @@ function extractPluginManifest(htmlContent) {
         }
       }
     }
+    // Declaring the storage event without storage would install but never
+    // fire, so fail the install loudly — the same rule as reactions, which
+    // also need storage to run.
+    if (Array.isArray(manifest.events) && manifest.events.includes('plugin.storage.changed') && manifest.storage !== true) {
+      errors.push('events: "plugin.storage.changed" requires "storage": true (the event only fires for plugins that store data).');
+    }
   }
   if (manifest.reactions !== undefined) {
     if (!Array.isArray(manifest.reactions)) {
@@ -1094,6 +1107,11 @@ function extractPluginManifest(htmlContent) {
         }
         if (typeof reaction.on !== 'string' || !pluginEvents.isKnownEvent(reaction.on)) {
           errors.push(`reactions[${index}].on must be a known event (catalog: ${pluginEvents.PLUGIN_EVENT_CATALOG.join(', ')}).`);
+        }
+        // A reaction on a storage change would silently never run (the
+        // loop guard drops it), so fail the install loudly instead.
+        if (reaction.on === 'plugin.storage.changed') {
+          errors.push(`reactions[${index}].on must not be 'plugin.storage.changed' (reactions never run on a storage change).`);
         }
         if (reaction.action !== 'increment') {
           errors.push(`reactions[${index}].action must be 'increment' (the only supported action).`);
@@ -1409,6 +1427,9 @@ fastify.delete('/api/widgets/:filename', async (request, reply) => {
           );
         }
       }
+      // The data is gone, so its counter goes with it (issue #347): the
+      // set shrinks, and a reinstall starts from a fresh counter.
+      householdChanges.removePlugin(pluginId);
     }
 
     if (result.changes === 0) {
@@ -1513,7 +1534,10 @@ fastify.put('/api/plugin/v1/storage/:pluginId/:key', async (request, reply) => {
       updated_at = CURRENT_TIMESTAMP
   `).run(pluginId, key, valueJson);
 
-  return { success: true };
+  // Bump in-route so the response carries the exact revision the event
+  // will carry (issue #347).
+  const revision = householdChanges.bumpPlugin(pluginId);
+  return { success: true, revision };
 });
 
 fastify.delete('/api/plugin/v1/storage/:pluginId/:key', async (request, reply) => {
@@ -1525,7 +1549,9 @@ fastify.delete('/api/plugin/v1/storage/:pluginId/:key', async (request, reply) =
   if (result.changes === 0) {
     return reply.status(404).send({ error: 'Key not found.' });
   }
-  return { success: true };
+  // Same in-route bump as PUT, for the same reason.
+  const revision = householdChanges.bumpPlugin(pluginId);
+  return { success: true, revision };
 });
 
 // Atomic numeric delta on a JSON path inside a stored document — the primitive
@@ -1613,7 +1639,9 @@ fastify.post('/api/plugin/v1/storage/:pluginId/:key/increment', async (request, 
     // concurrent HTTP requests cannot interleave a read-modify-write here.
     const applyIncrement = db.transaction(() => incrementPluginStorage(pluginId, key, pathSegments, delta));
     const { result, value } = applyIncrement();
-    return { success: true, result, value };
+    // Same in-route bump as PUT, for the same reason.
+    const revision = householdChanges.bumpPlugin(pluginId);
+    return { success: true, result, value, revision };
   } catch (error) {
     if (error.statusCode) {
       return reply.status(error.statusCode).send({ error: error.message });
@@ -1845,6 +1873,10 @@ function resolveReactionDelta(deltaSpec, manifest, pluginId, payload) {
 }
 
 function runDeclarativeReactions(message) {
+  // A reaction never fires on a storage change itself: the reaction writes
+  // plugin storage, which would emit plugin.storage.changed, which would
+  // fire the reaction again — a self-triggering loop (issue #347).
+  if (message.event === 'plugin.storage.changed') return;
   try {
     const rows = db.prepare(
       'SELECT plugin_id, manifest_json FROM plugins WHERE plugin_id IS NOT NULL AND manifest_json IS NOT NULL'
@@ -1865,6 +1897,9 @@ function runDeclarativeReactions(message) {
             () => incrementPluginStorage(row.plugin_id, reaction.key, pathSegments, delta)
           );
           applyReaction();
+          // A server-side storage write moves the plugin's counter exactly
+          // like a request write does (issue #347).
+          householdChanges.bumpPlugin(row.plugin_id);
         } catch (error) {
           console.error(`Plugin reaction failed (${row.plugin_id} on ${message.event}):`, error.message);
         }
@@ -2972,6 +3007,12 @@ fastify.patch('/api/devices/:deviceName/settings', upsertDeviceSettings);
 // its own column (see schema47) so a settings PUT can never wipe it, and
 // its route is excluded from the household-changes bump (see ROUTE_DOMAINS)
 // so a resize can never set off a refetch loop.
+// No reported viewport may be trusted at face value: a client can send any
+// numbers it likes, and the mirror renders at the reported size. Clamp into
+// sane bounds instead of rejecting — a real display outside them is still
+// renderable, just not at an absurd size.
+const clampViewportValue = (value, min, max) => Math.min(Math.max(value, min), max);
+
 const parseViewportReport = (body) => {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const { width, height } = body;
@@ -2979,7 +3020,11 @@ const parseViewportReport = (body) => {
   if (!Number.isInteger(width) || width <= 0) return null;
   if (!Number.isInteger(height) || height <= 0) return null;
   if (!Number.isFinite(devicePixelRatio) || devicePixelRatio <= 0) return null;
-  return { width, height, devicePixelRatio };
+  return {
+    width: clampViewportValue(width, 200, 10000),
+    height: clampViewportValue(height, 200, 10000),
+    devicePixelRatio: clampViewportValue(devicePixelRatio, 0.5, 8),
+  };
 };
 
 fastify.post('/api/devices/:deviceName/viewport', async (request, reply) => {
@@ -2994,7 +3039,16 @@ fastify.post('/api/devices/:deviceName/viewport', async (request, reply) => {
   }
 
   try {
-    ensureDeviceExists(deviceName);
+    // Update-only, like the reload-request routes: a viewport report is
+    // telemetry from a display that already exists, not a registration.
+    // Creating the row here meant every browser that merely opened HomeGlow
+    // showed up in Admin → Devices. A genuinely new display still gets its
+    // row the first time it saves settings (PUT/PATCH settings, tab and
+    // widget-assignment writes all create it), so first-run is unaffected.
+    const row = db.prepare('SELECT id FROM devices WHERE name = ?').get(deviceName);
+    if (!row) {
+      return reply.status(404).send({ error: 'device not found' });
+    }
     // Deliberately NOT touching updateTime: a viewport report is not an
     // edit, and it must not reorder the Admin Devices list on every resize.
     db.prepare('UPDATE devices SET viewport_json = ? WHERE name = ?').run(
@@ -7998,6 +8052,24 @@ const start = async () => {
     fastify.register(require("./routes/driveBackup"), { db, uploadsDir: UPLOADS_ROOT, demoMode: DEMO_MODE });
     // Backup to a file and restore from one, without Google (issue #305).
     registerLocalBackupRoutes(fastify, { db: haDb, dbPath, uploadsDir: UPLOADS_ROOT, demoMode: DEMO_MODE });
+
+    // Seed a counter for every plugin that already has stored data (issue
+    // #347): after a restart, household counters all differ from what
+    // displays last saw, but a plugin counter would simply be gone — and
+    // the client prunes vanished keys silently, so a display that missed a
+    // write just before the restart would keep showing stale data until
+    // that plugin's next write. Seeding makes those frames read as moved,
+    // matching the "reloads everything once" promise. Best effort: a
+    // missing table must never fail boot.
+    try {
+      if (doesTableExist('plugin_storage')) {
+        const rows = db.prepare('SELECT DISTINCT plugin_id FROM plugin_storage').all();
+        householdChanges.seedPlugins(rows.map((row) => row.plugin_id));
+      }
+    } catch (error) {
+      console.warn('Plugin storage seeding failed, continuing without it:', error.message);
+    }
+
     await fastify.listen({ port: process.env.PORT || 5000, host: '0.0.0.0' });
     console.log(`Server running on port ${process.env.PORT || 5000}`);
     // Dates and places for photos uploaded before the server read them, once.
