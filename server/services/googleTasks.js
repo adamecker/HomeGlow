@@ -423,7 +423,9 @@ async function syncUserGoogleTasks(db, userId) {
     const dueDate = parseDueDateOnly(task.due);
     const isDue = !dueDate || dueDate <= today;
     const targetVisible = isDue ? 1 : 0;
-    const targetDueDate = dueDate || today;
+    // A Google task with no deadline keeps a null due_date: stamping today
+    // here made it show "Due <today>" on the wall and re-stamped daily.
+    const targetDueDate = dueDate;
 
     if (existingSchedule) {
       let changed = false;
