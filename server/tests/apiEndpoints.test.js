@@ -99,6 +99,22 @@ test.before(async () => {
     });
 
     await waitForServerReady();
+
+    // The tab/Stack tests below assume a fresh device: only a Home tab, no
+    // widgets. A brand-new device is auto-seeded from the most recently
+    // configured device, so create theirs now, while no device has any
+    // widgets yet, or they would inherit another test's tabs and widgets.
+    // (Same reason haPanelRoutes.test.js creates both displays before
+    // placing anything.)
+    for (const name of [
+        'transfer-move', 'transfer-copy', 'transfer-refuse', 'transfer-spot',
+        'in-stack', 'in-stack-bad', 'stack-move', 'stack-remove',
+        'stack-unstack', 'stack-deltab', 'stack-stale', 'stack-place',
+        'undo-mark',
+    ]) {
+        const created = await api(`/api/devices/${name}/settings`, { method: 'PUT', body: JSON.stringify({}) });
+        assert.equal(created.status, 200, JSON.stringify(created.body));
+    }
 });
 
 test.after(async () => {
@@ -1305,7 +1321,7 @@ test('a removed widget comes back with its place and settings when its entry is 
 });
 
 test('moving a widget to another tab carries its per-tab settings and clears its position', async () => {
-    const deviceName = `transfer-move-${Date.now()}`;
+    const deviceName = 'transfer-move';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
 
     const createTabRes = await api(`${base}/tabs`, {
@@ -1345,7 +1361,7 @@ test('moving a widget to another tab carries its per-tab settings and clears its
 });
 
 test('copying a widget to another tab keeps it where it was', async () => {
-    const deviceName = `transfer-copy-${Date.now()}`;
+    const deviceName = 'transfer-copy';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
 
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'star', show_label: true }) });
@@ -1366,7 +1382,7 @@ test('copying a widget to another tab keeps it where it was', async () => {
 });
 
 test('a widget cannot be moved onto a tab that already shows it, or from a tab without it', async () => {
-    const deviceName = `transfer-refuse-${Date.now()}`;
+    const deviceName = 'transfer-refuse';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
 
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'star', show_label: true }) });
@@ -1399,7 +1415,7 @@ test('a widget cannot be moved onto a tab that already shows it, or from a tab w
 });
 
 test('a moved widget can land at a given spot', async () => {
-    const deviceName = `transfer-spot-${Date.now()}`;
+    const deviceName = 'transfer-spot';
     const base = `/api/devices/${deviceName}`;
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'home' }) });
     await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: 'calendar', tabNumber: 1 }) });
@@ -1412,7 +1428,7 @@ test('a moved widget can land at a given spot', async () => {
 });
 
 test('widgets in a Stack keep their tab entry, marked, with its settings', async () => {
-    const deviceName = `in-stack-${Date.now()}`;
+    const deviceName = 'in-stack';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: 'weather', tabNumber: 1 }) });
     await api(`${base}/widget-assignments/entry`, {
@@ -1455,7 +1471,7 @@ test('widgets in a Stack keep their tab entry, marked, with its settings', async
 });
 
 test('marking widgets in a Stack checks what it is given', async () => {
-    const base = `/api/devices/${encodeURIComponent(`in-stack-bad-${Date.now()}`)}`;
+    const base = '/api/devices/in-stack-bad';
     await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: 'chores', tabNumber: 1 }) });
     const send = (body) => api(`${base}/widget-assignments/in-stack`, { method: 'PATCH', body: JSON.stringify(body) });
     assert.equal((await send({ tabNumber: 1, stack: 'abcd1234', widgets: [] })).status, 400);
@@ -1465,7 +1481,7 @@ test('marking widgets in a Stack checks what it is given', async () => {
 });
 
 test('a Stack moves to another tab with its widgets in one write, settings and all', async () => {
-    const deviceName = `stack-move-${Date.now()}`;
+    const deviceName = 'stack-move';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'star', show_label: true }) });
     for (const name of ['stack:abcd', 'weather', 'calendar']) {
@@ -1509,7 +1525,7 @@ test('a Stack moves to another tab with its widgets in one write, settings and a
 });
 
 test('removing a Stack takes its widgets along, and one write puts them all back', async () => {
-    const deviceName = `stack-remove-${Date.now()}`;
+    const deviceName = 'stack-remove';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     for (const name of ['stack:abcd', 'weather', 'chores']) {
         await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: name, tabNumber: 1 }) });
@@ -1561,7 +1577,7 @@ test('removing a Stack takes its widgets along, and one write puts them all back
 });
 
 test('unstacking is one write: the Stack goes, its widgets come back with their settings', async () => {
-    const deviceName = `stack-unstack-${Date.now()}`;
+    const deviceName = 'stack-unstack';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     for (const name of ['stack:abcd', 'weather']) {
         await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: name, tabNumber: 1 }) });
@@ -1588,7 +1604,7 @@ test('unstacking is one write: the Stack goes, its widgets come back with their 
 });
 
 test('deleting a tab with a Stack hands it to Home with its widgets still inside', async () => {
-    const deviceName = `stack-deltab-${Date.now()}`;
+    const deviceName = 'stack-deltab';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'star', show_label: true }) });
     for (const name of ['stack:abcd', 'weather', 'calendar']) {
@@ -1604,7 +1620,7 @@ test('deleting a tab with a Stack hands it to Home with its widgets still inside
 });
 
 test('a Stack move goes by the saved Stack, not an out-of-date list from the wall', async () => {
-    const deviceName = `stack-stale-${Date.now()}`;
+    const deviceName = 'stack-stale';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/tabs`, { method: 'POST', body: JSON.stringify({ label: 'Two', icon: 'star', show_label: true }) });
     for (const name of ['stack:abcd', 'calendar', 'chores']) {
@@ -1634,7 +1650,7 @@ test('a Stack move goes by the saved Stack, not an out-of-date list from the wal
 });
 
 test('a new Stack is placed and its widgets marked in one write', async () => {
-    const deviceName = `stack-place-${Date.now()}`;
+    const deviceName = 'stack-place';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: 'weather', tabNumber: 1 }) });
     const res = await api(`${base}/widget-assignments/in-stack`, {
@@ -1649,7 +1665,7 @@ test('a new Stack is placed and its widgets marked in one write', async () => {
 });
 
 test('a late Undo keeps a Stack mark the widget got since it was removed', async () => {
-    const deviceName = `undo-mark-${Date.now()}`;
+    const deviceName = 'undo-mark';
     const base = `/api/devices/${encodeURIComponent(deviceName)}`;
     await api(`${base}/widget-assignments`, { method: 'POST', body: JSON.stringify({ widget_name: 'weather', tabNumber: 1 }) });
     await api(`${base}/widget-assignments/layout`, {

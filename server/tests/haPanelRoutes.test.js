@@ -679,9 +679,17 @@ test('a panel resized in the builder is resized where it is placed, and every di
   const { id, filename } = created.body.panel;
   const widget = `plugin:${filename}`;
   // On a tab on two displays, at different sizes.
+  // Create both displays' tabs before placing anything: a brand-new device
+  // is auto-seeded from the most recently configured device, so creating
+  // the second display after placing on the first would copy the placement
+  // and the second placement would be refused as a duplicate.
+  const addTab = async (device) => {
+    assert.equal((await post(`/api/devices/${device}/tabs`, { label: 'Home', icon: 'home', show_label: true })).status, 200);
+  };
+  await addTab('sized-hall');
+  await addTab('sized-kitchen');
   const place = async (device, w, h) => {
     const base = `/api/devices/${device}`;
-    assert.equal((await post(`${base}/tabs`, { label: 'Home', icon: 'home', show_label: true })).status, 200);
     assert.equal((await post(`${base}/widget-assignments`, { widget_name: widget, tabNumber: 1 })).status, 200);
     const saved = await patch(`${base}/widget-assignments/layout/bulk`, { layouts: [{ widget_name: widget, tabNumber: 1, layout_x: 0, layout_y: 0, layout_w: w, layout_h: h }] });
     assert.equal(saved.status, 200, JSON.stringify(saved.body));

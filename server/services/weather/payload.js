@@ -101,6 +101,14 @@ function validatePayload(payload) {
             if (!CONDITION_SET.has(day?.condition)) {
                 problems.push(`forecast[${index}].condition "${day?.condition}" is not in the vocabulary`);
             }
+            if (day?.precipitationProbability !== null && day?.precipitationProbability !== undefined
+                && (!isFiniteNumber(day.precipitationProbability) || day.precipitationProbability < 0 || day.precipitationProbability > 100)) {
+                problems.push(`forecast[${index}].precipitationProbability must be 0-100 when present`);
+            }
+            if (day?.uvIndex !== null && day?.uvIndex !== undefined
+                && (!isFiniteNumber(day.uvIndex) || day.uvIndex < 0 || day.uvIndex > 20)) {
+                problems.push(`forecast[${index}].uvIndex must be 0-20 when present`);
+            }
         });
     }
 
@@ -110,6 +118,10 @@ function validatePayload(payload) {
         hourly.forEach((point, index) => {
             if (!isFiniteNumber(point?.timestamp)) {
                 problems.push(`hourly[${index}].timestamp must be a unix seconds number`);
+            }
+            if (point?.precipitationProbability !== null && point?.precipitationProbability !== undefined
+                && (!isFiniteNumber(point.precipitationProbability) || point.precipitationProbability < 0 || point.precipitationProbability > 100)) {
+                problems.push(`hourly[${index}].precipitationProbability must be 0-100 when present`);
             }
         });
     }
@@ -164,11 +176,19 @@ function buildPayload({
             condition: normalizeCondition(day.condition),
             description: day.description || null,
             precipitation: optionalNumber(day.precipitation),
+            // 0-100. OpenWeatherMap supplies it; Home Assistant has no
+            // equivalent in the standard forecast attributes and the demo
+            // snapshot has none, so null there and the client hides it.
+            precipitationProbability: optionalNumber(day.precipitationProbability),
+            // 0-20. Open-Meteo supplies uv_index_max per day; other
+            // providers have no equivalent, so null there.
+            uvIndex: optionalNumber(day.uvIndex),
         })),
         hourly: hourly.map((point) => ({
             timestamp: point.timestamp,
             temp: optionalNumber(point.temp),
             precipitation: optionalNumber(point.precipitation),
+            precipitationProbability: optionalNumber(point.precipitationProbability),
         })),
         airQuality: airQuality
             ? {
