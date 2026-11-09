@@ -53,4 +53,9 @@ module.exports = [
   { schemaId: 45, migrationPath: './migrations/schema45-prizePaused', },
   { schemaId: 46, migrationPath: './migrations/schema46-oneTimeAfter', },
   { schemaId: 47, migrationPath: './migrations/schema47-deviceViewport', },
+  // Prod-line numbering: the PR branch carries this migration as 42, but
+  // the prod line already has its own 42, so it lands here as 48 — the
+  // same renumbering the deviceViewport migration got (41 on its branch,
+  // 47 on this line).
+  { schemaId: 48, migrationPath: './migrations/schema48-poolClaimedOn', },
 ];
