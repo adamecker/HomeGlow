@@ -2662,6 +2662,9 @@ async function dailyBackgroundProcessing() {
     // bonus chores that persist from day to day should reset to unassigned.
     // A card from someone's own schedule stays theirs, clams or not: an
     // any-day one is open all period, and its person is part of it.
+    // Clearing pool_claimed_on matters too: a claimed card that is reset
+    // here and later assigned to someone as a daily chore must not be
+    // mistaken for a claim by the recurring return below (issue #386).
     const choresToReset = db.prepare(`
       SELECT cs.id,
         cs.user_id,
@@ -2678,7 +2681,7 @@ async function dailyBackgroundProcessing() {
     console.log(`Found ${choresToReset.length} bonus chores to reset`);
     let resetScheduleCount = 0;
     for (const schedule of choresToReset) {
-      db.prepare('UPDATE chore_schedules set user_id = NULL WHERE id = ?').run(schedule.id);
+      db.prepare('UPDATE chore_schedules set user_id = NULL, pool_claimed_on = NULL WHERE id = ?').run(schedule.id);
       console.log(`Reset schedule ID ${schedule.id}: "${schedule.title}" (user_id: ${schedule.user_id})`);
       resetScheduleCount++;
     }
@@ -2738,7 +2741,7 @@ async function dailyBackgroundProcessing() {
     console.log(`  - Day-of schedules pruned: ${prunedScheduleCount}`);
     console.log(`  - Orphaned chores deleted: ${prunedChoreCount}`);
     console.log(`  - Bonus chores reset: ${resetScheduleCount}`);
-    console.log(`  - Completed recurring bonus chores returned to pool: ${returnedBonusCount}`);
+    console.log(`  - Claimed recurring bonus chores returned to pool: ${returnedBonusCount}`);
     console.log(`  - Sticky chores triggered: ${stickySchedulesCreated}`);
     try {
       routines.nightly();
@@ -4037,7 +4040,8 @@ fastify.patch('/api/chore-schedules/:id', async (request, reply) => {
 // on purpose, so the server could not tell the two apart — and the nightly
 // cleanup then pulled parent-assigned paid chores into the pool (issue
 // #386). Claiming records the claim date on the schedule (pool_claimed_on,
-// migration schema42); the nightly job returns only schedules carrying
+// migration schema48 on this line, schema42 on the PR branch); the nightly
+// job returns only schedules carrying
 // that marker. The route is also where "one open bonus chore per kid" is
 // enforced: the widget checks it too, but only the server sees every
 // display.
