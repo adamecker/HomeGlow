@@ -283,6 +283,7 @@ async function completeGoogleTask(db, userId, taskId) {
 
 async function fetchAllUserTasks(accessToken) {
   let listIds = [];
+  let listsComplete = true;
   try {
     let listPageToken = null;
     do {
@@ -299,6 +300,8 @@ async function fetchAllUserTasks(accessToken) {
     } while (listPageToken);
   } catch (err) {
     console.warn('[GoogleTasks] Failed to list task lists, falling back to @default:', err.message);
+    // The list is partial now: callers must not treat "not returned" as "gone".
+    listsComplete = false;
   }
 
   if (listIds.length === 0) {
@@ -338,7 +341,7 @@ async function fetchAllUserTasks(accessToken) {
     } while (taskPageToken);
   }
 
-  return allTasks;
+  return { tasks: allTasks, listsComplete };
 }
 
 async function syncUserGoogleTasks(db, userId) {
@@ -346,11 +349,12 @@ async function syncUserGoogleTasks(db, userId) {
   if (!account) return { synced: 0, imported: 0, updated: 0 };
 
   const accessToken = await getValidUserAccessToken(db, userId);
-  const tasks = await fetchAllUserTasks(accessToken);
+  const { tasks, listsComplete } = await fetchAllUserTasks(accessToken);
   const today = getTodayLocalDate();
 
   let importedCount = 0;
   let updatedCount = 0;
+  let deletedCount = 0;
 
   const findScheduleByGoogleTaskId = db.prepare(`
     SELECT cs.id, cs.chore_id, cs.user_id, cs.visible, cs.due_date, c.title, c.clam_value
@@ -368,6 +372,10 @@ async function syncUserGoogleTasks(db, userId) {
     SELECT id FROM chore_history
     WHERE chore_schedule_id = ? AND date = ? AND kind = 'completion'
   `);
+  const checkChoreCompletedBeforeToday = db.prepare(`
+    SELECT id FROM chore_history
+    WHERE chore_schedule_id = ? AND date < ? AND kind = 'completion'
+  `);
   const insertChoreHistory = db.prepare(`
     INSERT INTO chore_history (user_id, chore_schedule_id, date, clam_value, title, kind)
     VALUES (?, ?, ?, ?, ?, 'completion')
@@ -376,8 +384,18 @@ async function syncUserGoogleTasks(db, userId) {
     DELETE FROM chore_history
     WHERE chore_schedule_id = ? AND date = ? AND kind = 'missed'
   `);
-  const hideSchedule = db.prepare(`
-    UPDATE chore_schedules SET visible = 0 WHERE id = ?
+  const deleteSchedule = db.prepare(`
+    DELETE FROM chore_schedules WHERE id = ?
+  `);
+  const countSchedulesForChore = db.prepare(`
+    SELECT COUNT(*) AS n FROM chore_schedules WHERE chore_id = ?
+  `);
+  const deleteChore = db.prepare(`
+    DELETE FROM chores WHERE id = ?
+  `);
+  const listUserGoogleSchedules = db.prepare(`
+    SELECT id, chore_id, google_task_id FROM chore_schedules
+    WHERE user_id = ? AND google_task_id IS NOT NULL
   `);
   const insertChore = db.prepare('INSERT INTO chores (title, description, clam_value, icon) VALUES (?, ?, 0, ?)');
   const insertSchedule = db.prepare(`
@@ -386,23 +404,43 @@ async function syncUserGoogleTasks(db, userId) {
     ) VALUES (?, ?, NULL, 'day-of', 1, ?, ?)
   `);
 
+  // Delete a Google-linked schedule, and its chore too when no other
+  // schedule uses it. History rows survive: chore_history.clam_value is
+  // tallied per user (not joined to schedules), and its FK is
+  // ON DELETE SET NULL, so earned clams and the completion record stay.
+  const deleteGoogleSchedule = (schedule) => {
+    deleteSchedule.run(schedule.id);
+    if (countSchedulesForChore.get(schedule.chore_id).n === 0) {
+      deleteChore.run(schedule.chore_id);
+    }
+    deletedCount++;
+  };
+
   for (const task of tasks) {
     if (!task.id) continue;
 
     const existingSchedule = findScheduleByGoogleTaskId.get(task.id);
 
-    // Case B: Deleted or hidden in Google Tasks
+    // Case B: Deleted or hidden in Google Tasks — the chore is gone from
+    // Google, so remove it here too instead of leaving a hidden row behind
+    // that still shows up in Admin.
     if (task.deleted || task.hidden) {
-      if (existingSchedule && existingSchedule.visible === 1) {
-        hideSchedule.run(existingSchedule.id);
-        updatedCount++;
+      if (existingSchedule) {
+        deleteGoogleSchedule(existingSchedule);
       }
       continue;
     }
 
-    // Case A: Marked completed in Google Tasks
+    // Case A: Marked completed in Google Tasks. A checked chore stays on
+    // the wall until midnight: the first sync after completion records
+    // today's completion and leaves the schedule alone, and only once
+    // that completion day has passed is the chore deleted.
     if (task.status === 'completed') {
       if (existingSchedule) {
+        if (checkChoreCompletedBeforeToday.get(existingSchedule.id, today)) {
+          deleteGoogleSchedule(existingSchedule);
+          continue;
+        }
         const isCompleted = checkChoreCompletedToday.get(existingSchedule.id, today);
         if (!isCompleted) {
           deleteMissedHistory.run(existingSchedule.id, today);
@@ -460,23 +498,39 @@ async function syncUserGoogleTasks(db, userId) {
     }
   }
 
-  return { synced: tasks.length, imported: importedCount, updated: updatedCount };
+  // Reconciliation: Google purges deleted tasks from the API after a while,
+  // so a schedule whose id no longer comes back at all is an orphan left
+  // over from before — delete it. Only runs after a complete fetch: if the
+  // task-list listing fell back to @default, "not returned" proves nothing
+  // about other lists, so nothing is reconciled.
+  if (listsComplete) {
+    const seenTaskIds = new Set(tasks.map((t) => t.id).filter(Boolean));
+    for (const sched of listUserGoogleSchedules.all(userId)) {
+      if (!seenTaskIds.has(sched.google_task_id)) {
+        deleteGoogleSchedule(sched);
+      }
+    }
+  }
+
+  return { synced: tasks.length, imported: importedCount, updated: updatedCount, deleted: deletedCount };
 }
 
 async function syncAllGoogleTasks(db) {
   const accounts = db.prepare('SELECT user_id FROM user_google_tasks_accounts').all();
   let totalImported = 0;
   let totalUpdated = 0;
+  let totalDeleted = 0;
   for (const acc of accounts) {
     try {
       const res = await syncUserGoogleTasks(db, acc.user_id);
       totalImported += res.imported;
       totalUpdated += res.updated;
+      totalDeleted += res.deleted || 0;
     } catch (err) {
       console.warn(`[GoogleTasks] Sync error for user ${acc.user_id}:`, err.message);
     }
   }
-  return { totalUsers: accounts.length, totalImported, totalUpdated };
+  return { totalUsers: accounts.length, totalImported, totalUpdated, totalDeleted };
 }
 
 module.exports = {
