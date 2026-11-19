@@ -226,6 +226,20 @@ function getTodayLocalDate() {
   return `${y}-${m}-${d}`;
 }
 
+// The local calendar date of an ISO timestamp, in the server's household
+// timezone (the same local-date basis getTodayLocalDate uses). The UTC date
+// part of the timestamp is wrong near midnight: 02:00Z is still the
+// previous evening here.
+function localDateOf(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 async function completeGoogleTask(db, userId, taskId) {
   if (!taskId || !userId) return;
   try {
@@ -401,7 +415,7 @@ async function syncUserGoogleTasks(db, userId) {
   const insertSchedule = db.prepare(`
     INSERT INTO chore_schedules (
       chore_id, user_id, crontab, duration, visible, due_date, google_task_id
-    ) VALUES (?, ?, NULL, 'day-of', 1, ?, ?)
+    ) VALUES (?, ?, NULL, 'day-of', ?, ?, ?)
   `);
 
   // Delete a Google-linked schedule, and its chore too when no other
@@ -421,10 +435,8 @@ async function syncUserGoogleTasks(db, userId) {
 
     const existingSchedule = findScheduleByGoogleTaskId.get(task.id);
 
-    // Case B: Deleted or hidden in Google Tasks — the chore is gone from
-    // Google, so remove it here too instead of leaving a hidden row behind
-    // that still shows up in Admin.
-    if (task.deleted || task.hidden) {
+    // Deleted in Google Tasks — the chore is gone, whatever its status was.
+    if (task.deleted) {
       if (existingSchedule) {
         deleteGoogleSchedule(existingSchedule);
       }
@@ -435,6 +447,10 @@ async function syncUserGoogleTasks(db, userId) {
     // the wall until midnight: the first sync after completion records
     // today's completion and leaves the schedule alone, and only once
     // that completion day has passed is the chore deleted.
+    // Google returns completed tasks with hidden: true, so completion
+    // must be checked BEFORE the hidden check below — otherwise every
+    // Google-side check-off deletes the chore on the next sync instead of
+    // leaving it checked until midnight.
     if (task.status === 'completed') {
       if (existingSchedule) {
         if (checkChoreCompletedBeforeToday.get(existingSchedule.id, today)) {
@@ -453,6 +469,39 @@ async function syncUserGoogleTasks(db, userId) {
           );
           updatedCount++;
         }
+      } else if (localDateOf(task.completed) === today && task.title) {
+        // First seen already completed: import it only when the completion
+        // is from today, so it shows checked on the wall for the rest of
+        // the day. A completion from an earlier day has already had its
+        // midnight and is skipped.
+        const dueDate = parseDueDateOnly(task.due);
+        const isDue = !dueDate || dueDate <= today;
+        const choreResult = insertChore.run(task.title.trim(), task.notes || null, '📋');
+        const schedResult = insertSchedule.run(
+          choreResult.lastInsertRowid,
+          userId,
+          isDue ? 1 : 0,
+          dueDate,
+          task.id
+        );
+        insertChoreHistory.run(
+          userId,
+          schedResult.lastInsertRowid,
+          today,
+          0,
+          task.title.trim()
+        );
+        importedCount++;
+      }
+      continue;
+    }
+
+    // Case B: Hidden in Google Tasks but not completed — the chore is gone
+    // from Google, so remove it here too instead of leaving a hidden row
+    // behind that still shows up in Admin.
+    if (task.hidden) {
+      if (existingSchedule) {
+        deleteGoogleSchedule(existingSchedule);
       }
       continue;
     }
@@ -491,6 +540,7 @@ async function syncUserGoogleTasks(db, userId) {
       insertSchedule.run(
         choreResult.lastInsertRowid,
         userId,
+        1,
         targetDueDate,
         task.id
       );
