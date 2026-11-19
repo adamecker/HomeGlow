@@ -209,3 +209,116 @@ test('reconciliation spares schedules Google still returns', async () => {
     db.close();
   }
 });
+
+// Google returns completed tasks with hidden: true — the production shape
+// the original completed-task tests never used (they stubbed status only).
+// A completed-and-hidden task must still get the till-midnight treatment,
+// not the hidden-task deletion.
+test('a task completed in Google stays on the wall even though Google returns it hidden', async () => {
+  const db = makeDb();
+  const { choreId, scheduleId } = seedGoogleChore(db, 'Ask Brynn lunch', 'task-done');
+  const restore = stubTasksApi([{
+    id: 'task-done',
+    title: 'Ask Brynn lunch',
+    status: 'completed',
+    hidden: true,
+    completed: new Date().toISOString(),
+  }]);
+  try {
+    const res = await syncUserGoogleTasks(db, 4);
+    assert.equal(res.deleted, 0);
+    const sched = db.prepare('SELECT visible FROM chore_schedules WHERE id = ?').get(scheduleId);
+    assert.equal(sched.visible, 1);
+    assert.notEqual(db.prepare('SELECT id FROM chores WHERE id = ?').get(choreId), undefined);
+    const completion = db.prepare(
+      "SELECT date FROM chore_history WHERE chore_schedule_id = ? AND kind = 'completion'"
+    ).get(scheduleId);
+    assert.equal(completion.date, todayLocal());
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
+test('a completed-and-hidden task is deleted once its completion day has passed', async () => {
+  const db = makeDb();
+  const { choreId, scheduleId } = seedGoogleChore(db, 'Ask Brynn lunch', 'task-done');
+  db.prepare(
+    "INSERT INTO chore_history (user_id, chore_schedule_id, date, clam_value, title, kind) VALUES (?, ?, ?, 0, ?, 'completion')"
+  ).run(4, scheduleId, yesterdayLocal(), 'Ask Brynn lunch');
+  const restore = stubTasksApi([{
+    id: 'task-done',
+    title: 'Ask Brynn lunch',
+    status: 'completed',
+    hidden: true,
+    completed: `${yesterdayLocal()}T19:00:00.000Z`,
+  }]);
+  try {
+    const res = await syncUserGoogleTasks(db, 4);
+    assert.equal(res.deleted, 1);
+    assert.equal(db.prepare('SELECT id FROM chore_schedules WHERE id = ?').get(scheduleId), undefined);
+    assert.equal(db.prepare('SELECT id FROM chores WHERE id = ?').get(choreId), undefined);
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM chore_history WHERE kind = 'completion'").get().n,
+      1
+    );
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
+test('a task first seen already completed today is imported and shown checked', async () => {
+  const db = makeDb();
+  const restore = stubTasksApi([{
+    id: 'task-new',
+    title: 'Bring the black teddy bear',
+    status: 'completed',
+    hidden: true,
+    completed: new Date().toISOString(),
+    due: `${todayLocal()}T00:00:00.000Z`,
+  }]);
+  try {
+    const res = await syncUserGoogleTasks(db, 4);
+    assert.equal(res.imported, 1);
+    const sched = db.prepare(
+      'SELECT id, visible FROM chore_schedules WHERE google_task_id = ?'
+    ).get('task-new');
+    assert.notEqual(sched, undefined);
+    assert.equal(sched.visible, 1);
+    const completion = db.prepare(
+      "SELECT date FROM chore_history WHERE chore_schedule_id = ? AND kind = 'completion'"
+    ).get(sched.id);
+    assert.equal(completion.date, todayLocal());
+  } finally {
+    restore();
+    db.close();
+  }
+});
+
+test('a task first seen already completed on an earlier day is not imported', async () => {
+  const db = makeDb();
+  const restore = stubTasksApi([{
+    id: 'task-old',
+    title: 'Done yesterday',
+    status: 'completed',
+    hidden: true,
+    completed: `${yesterdayLocal()}T19:00:00.000Z`,
+    due: `${yesterdayLocal()}T00:00:00.000Z`,
+  }]);
+  try {
+    const res = await syncUserGoogleTasks(db, 4);
+    assert.equal(res.imported, 0);
+    assert.equal(
+      db.prepare('SELECT id FROM chore_schedules WHERE google_task_id = ?').get('task-old'),
+      undefined
+    );
+    assert.equal(
+      db.prepare("SELECT COUNT(*) AS n FROM chore_history WHERE kind = 'completion'").get().n,
+      0
+    );
+  } finally {
+    restore();
+    db.close();
+  }
+});
